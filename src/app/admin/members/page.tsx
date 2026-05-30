@@ -15,14 +15,10 @@ export default async function AdminMembersPage() {
         userId: true,
         displayName: true,
         pictureUrl: true,
+        visitCount: true,
         role: true,
         createdAt: true,
         lastCheckInAt: true,
-        _count: {
-          select: {
-            checkIns: true,
-          },
-        },
         rank: {
           select: {
             name: true,
@@ -75,7 +71,7 @@ export default async function AdminMembersPage() {
         displayName: row.displayName,
         pictureUrl: row.pictureUrl,
         role: row.role,
-        checkInCount: row._count.checkIns,
+        checkInCount: row.visitCount,
         rankName: row.rank.name,
         registeredAt: row.createdAt.toISOString(),
         lastVisitedAt: row.lastCheckInAt ? row.lastCheckInAt.toISOString() : null,

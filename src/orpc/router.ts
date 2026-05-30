@@ -2265,9 +2265,10 @@ export const appRouter = {
         const startOfTodayInJstUtc = getStartOfTodayInJstUtc();
         const now = new Date();
 
-        const updatedCount = await prisma.$executeRaw`
+        const updatedCount =         await prisma.$executeRaw`
           UPDATE "users"
           SET "points" = "points" + 1,
+              "visitCount" = "visitCount" + 1,
               "lastCheckInAt" = ${now}
           WHERE "userId" = ${input.userId}
             AND ("lastCheckInAt" IS NULL OR "lastCheckInAt" < ${startOfTodayInJstUtc})

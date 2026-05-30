@@ -11,6 +11,7 @@
 --   userId      <- UID
 --   displayName <- LINEネーム
 --   points      <- ポイント数
+--   visitCount  <- ポイント数 (管理画面の来店回数表示用。CSV import 時は points と同値)
 --   nextRank    <- 会員ランク (レギュラー=regular / シルバー=silver / ゴールド=gold / ダイヤモンド=diamond / プラチナ=platinum)
 --   lastCheckInAt <- 最終来店の日時 (欠損は NULL)
 --   createdAt   <- 会員流入の日時
@@ -573,7 +574,20 @@ INSERT INTO "users" ("userId", "displayName", "points", "nextRank", "lastCheckIn
 ON CONFLICT ("userId") DO UPDATE SET
   "displayName" = EXCLUDED."displayName",
   "points" = EXCLUDED."points",
+  "visitCount" = EXCLUDED."points",
   "nextRank" = EXCLUDED."nextRank",
   "lastCheckInAt" = EXCLUDED."lastCheckInAt",
   "createdAt" = EXCLUDED."createdAt",
   "updatedAt" = EXCLUDED."updatedAt";
+
+-- Link imported members to the official account (required for admin members list filter).
+UPDATE "users"
+SET
+  "officialAccountId" = '52b8febd269a571bb9e92962018faf91',
+  "updatedAt" = NOW()
+WHERE "officialAccountId" IS NULL;
+
+-- Import 会員の visitCount を CSV 由来の points で初期化 (初回 import / 再 import 時)
+UPDATE "users"
+SET "visitCount" = "points"
+WHERE "officialAccountId" = '52b8febd269a571bb9e92962018faf91';

@@ -14,6 +14,7 @@ model User {
   pictureUrl                String?
   role                      UserRole?
   points                    Int                             @default(0)
+  visitCount                Int                             @default(0)
   nextRank                  String                          @default("regular")
   lastCheckInAt             DateTime?
   officialAccountId         String?
