@@ -1,4 +1,5 @@
 import { os } from "@orpc/server";
+import { ORPCError } from "@orpc/client";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { createHash } from "crypto";
@@ -371,6 +372,24 @@ async function getMemberBenefitSetting(officialAccountId: string | null) {
   return setting as MemberBenefitSettingWithRanks | null;
 }
 
+async function resolveMemberBenefitSettingForUser(userOfficialAccountId: string | null) {
+  const envOfficialAccountId = await resolveOfficialAccountId();
+  const scopeCandidates = [
+    envOfficialAccountId,
+    userOfficialAccountId,
+    null,
+  ].filter((id, index, array) => array.indexOf(id) === index);
+
+  for (const officialAccountId of scopeCandidates) {
+    const setting = await getMemberBenefitSetting(officialAccountId);
+    if (setting) {
+      return { setting, officialAccountId };
+    }
+  }
+
+  return null;
+}
+
 function hashReviewPassword(password: string) {
   return createHash("sha256").update(`review-password:${password}`).digest("hex");
 }
@@ -738,8 +757,29 @@ async function resolveVisitGachaContext(userId: string, officialAccountId: strin
   };
 }
 
-async function getVisitGachaPreview(userId: string, officialAccountId: string | null): Promise<VisitGachaPreview> {
-  const context = await resolveVisitGachaContext(userId, officialAccountId);
+async function resolveVisitGachaContextForUser(
+  userId: string,
+  userOfficialAccountId: string | null,
+): Promise<VisitGachaContext | null> {
+  const envOfficialAccountId = await resolveOfficialAccountId();
+  const scopeCandidates = [
+    envOfficialAccountId,
+    userOfficialAccountId,
+    null,
+  ].filter((id, index, array) => array.indexOf(id) === index);
+
+  for (const officialAccountId of scopeCandidates) {
+    const context = await resolveVisitGachaContext(userId, officialAccountId);
+    if (context) {
+      return context;
+    }
+  }
+
+  return null;
+}
+
+async function getVisitGachaPreview(userId: string, userOfficialAccountId: string | null): Promise<VisitGachaPreview> {
+  const context = await resolveVisitGachaContextForUser(userId, userOfficialAccountId);
   if (!context) {
     return {
       eligible: false,
@@ -754,8 +794,8 @@ async function getVisitGachaPreview(userId: string, officialAccountId: string | 
   };
 }
 
-async function runVisitGacha(userId: string, officialAccountId: string | null): Promise<VisitGachaResult> {
-  const context = await resolveVisitGachaContext(userId, officialAccountId);
+async function runVisitGacha(userId: string, userOfficialAccountId: string | null): Promise<VisitGachaResult> {
+  const context = await resolveVisitGachaContextForUser(userId, userOfficialAccountId);
   if (!context) {
     return {
       executed: false,
@@ -2089,7 +2129,10 @@ export const appRouter = {
           },
         });
         if (!user) {
-          throw new Error("ユーザーが見つかりません。");
+          throw new ORPCError("NOT_FOUND", {
+            message: "ユーザーが見つかりません。",
+            defined: true,
+          });
         }
         if (user.googleReviewId) {
           return {
@@ -2099,18 +2142,31 @@ export const appRouter = {
           };
         }
 
-        const officialAccountId = user.officialAccountId ?? (await resolveOfficialAccountId());
-        const benefitSetting = await getMemberBenefitSetting(officialAccountId);
+        const benefitResolution = await resolveMemberBenefitSettingForUser(user.officialAccountId);
+        const benefitSetting = benefitResolution?.setting ?? null;
+        const officialAccountId =
+          benefitResolution?.officialAccountId ??
+          user.officialAccountId ??
+          (await resolveOfficialAccountId());
         if (!benefitSetting?.reviewGiftId) {
-          throw new Error("口コミ特典ギフトが未設定です。");
+          throw new ORPCError("BAD_REQUEST", {
+            message: "口コミ特典ギフトが未設定です。管理画面の会員設定で口コミ特典を設定してください。",
+            defined: true,
+          });
         }
         if (!benefitSetting.reviewPasswordHash) {
-          throw new Error("口コミパスワードが未設定です。");
+          throw new ORPCError("BAD_REQUEST", {
+            message: "口コミパスワードが未設定です。管理画面で口コミパスワードを設定してください。",
+            defined: true,
+          });
         }
 
         const inputHash = hashReviewPassword(input.password);
         if (inputHash !== benefitSetting.reviewPasswordHash) {
-          throw new Error("パスワードが正しくありません。");
+          throw new ORPCError("BAD_REQUEST", {
+            message: "パスワードが正しくありません。",
+            defined: true,
+          });
         }
 
         const grantedTitle = await issueGiftFromSetting({
@@ -2207,7 +2263,7 @@ export const appRouter = {
         }
 
         const officialAccountId = user.officialAccountId ?? (await resolveOfficialAccountId());
-        const gacha = await runVisitGacha(user.userId, officialAccountId);
+        const gacha = await runVisitGacha(user.userId, user.officialAccountId);
         if (!gacha.executed) {
           return {
             ok: true,
@@ -2347,7 +2403,8 @@ export const appRouter = {
           WHERE "userId" = ${updatedUser.userId}
           LIMIT 1
         `;
-        const officialAccountId = userOfficialRows[0]?.officialAccountId ?? (await resolveOfficialAccountId());
+        const userOfficialAccountId = userOfficialRows[0]?.officialAccountId ?? null;
+        const officialAccountId = userOfficialAccountId ?? (await resolveOfficialAccountId());
 
         await prisma.$executeRaw`
           INSERT INTO "user_checkins"
@@ -2439,7 +2496,7 @@ export const appRouter = {
               winProbability: 0,
               previewGift: null,
             }
-          : await getVisitGachaPreview(updatedUser.userId, officialAccountId);
+          : await getVisitGachaPreview(updatedUser.userId, userOfficialAccountId);
 
         await sendLineDeliveryTriggers({
           triggerType: "CHECKIN_POINT_GRANTED",

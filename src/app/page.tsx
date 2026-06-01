@@ -587,6 +587,12 @@ export default function Home() {
     setGachaStartPopup((prev) => ({ ...prev, open: false }));
     setGachaJudgingLabel("判定中...");
     setIsGachaJudging(true);
+    let pendingGachaResult: {
+      won: boolean;
+      giftTitle: string | null;
+      resultImageUrl: string | null;
+      shouldRefreshGifts: boolean;
+    } | null = null;
     try {
       const result = await rpcClient.user.challengeVisitGacha({
         userId: profile.userId,
@@ -599,25 +605,35 @@ export default function Home() {
         setScanMessage("本日はガチャを実行できません。");
         return;
       }
-      setGachaPopup({
-        open: true,
+      pendingGachaResult = {
         won: result.won,
         giftTitle: result.giftTitle ?? null,
         resultImageUrl: result.resultImageUrl ?? null,
-      });
-      if (result.giftTitle) {
-        await fetchOwnedGifts(profile.userId);
-      }
+        shouldRefreshGifts: Boolean(result.giftTitle),
+      };
     } catch (error) {
       setScanMessage(error instanceof Error ? error.message : "ガチャの実行に失敗しました。");
     } finally {
-      const elapsedMs = Date.now() - judgingStartedAt;
-      const minJudgingMs = 3000;
-      if (elapsedMs < minJudgingMs) {
-        await wait(minJudgingMs - elapsedMs);
+      if (pendingGachaResult) {
+        const elapsedMs = Date.now() - judgingStartedAt;
+        const minJudgingMs = 5000;
+        if (elapsedMs < minJudgingMs) {
+          await wait(minJudgingMs - elapsedMs);
+        }
       }
       setIsGachaJudging(false);
       setGachaJudgingLabel("ポイント付与中...");
+      if (pendingGachaResult) {
+        setGachaPopup({
+          open: true,
+          won: pendingGachaResult.won,
+          giftTitle: pendingGachaResult.giftTitle,
+          resultImageUrl: pendingGachaResult.resultImageUrl,
+        });
+        if (pendingGachaResult.shouldRefreshGifts) {
+          void fetchOwnedGifts(profile.userId);
+        }
+      }
     }
   };
 
