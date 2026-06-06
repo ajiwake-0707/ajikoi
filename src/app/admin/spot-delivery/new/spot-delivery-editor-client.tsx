@@ -473,13 +473,26 @@ export default function SpotDeliveryEditorClient({ gifts, rankOptions, targetCou
                             </p>
                           </div>
                         </div>
-                        <button
-                          type="button"
-                          onClick={openGiftSheet}
-                          className="rounded-lg border border-[#cbd5e1] px-4 py-2 text-sm font-semibold text-[#334155]"
-                        >
-                          変更
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedGift(null);
+                              setShowGiftElement(false);
+                              setIsGiftSheetOpen(false);
+                            }}
+                            className="rounded-lg border border-[#e2e8f0] px-3 py-2 text-sm font-semibold text-[#64748b]"
+                          >
+                            取り消し
+                          </button>
+                          <button
+                            type="button"
+                            onClick={openGiftSheet}
+                            className="rounded-lg border border-[#cbd5e1] px-4 py-2 text-sm font-semibold text-[#334155]"
+                          >
+                            変更
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </section>

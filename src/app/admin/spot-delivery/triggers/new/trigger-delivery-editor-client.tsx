@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type TriggerType = "USER_SIGNUP" | "CHECKIN_POINT_GRANTED" | "RANK_UP" | "BIRTHDAY" | "GIFT_EXPIRES";
+type DelayDirection = "future" | "past";
 type DeliveryVisitCountSegment = "ZERO" | "ONE" | "TWO_TO_FOUR" | "FIVE_TO_NINE" | "TEN_OR_MORE";
 type LineTextMessage = { type: "text"; text: string };
 type LineImageMessage = { type: "image"; originalContentUrl: string; previewImageUrl: string };
@@ -114,7 +115,12 @@ export default function TriggerDeliveryEditorClient({
   const [targetVisitCountSegments, setTargetVisitCountSegments] = useState<DeliveryVisitCountSegment[]>(
     initialValue?.targetVisitCountSegments ?? [],
   );
-  const [delayDays, setDelayDays] = useState<number>(initialValue?.delayDays ?? 0);
+  const [delayDirection, setDelayDirection] = useState<DelayDirection>(
+    (initialValue?.delayDays ?? 0) < 0 ? "past" : "future",
+  );
+  const [delayDayCountInput, setDelayDayCountInput] = useState<string>(
+    String(Math.max(0, Math.min(365, Math.abs(initialValue?.delayDays ?? 0)))),
+  );
   const [deliveryHourJst, setDeliveryHourJst] = useState<number | null>(initialValue?.deliveryHourJst ?? null);
   const [isActive, setIsActive] = useState(initialValue?.isActive ?? true);
   const [isSaving, setIsSaving] = useState(false);
@@ -164,12 +170,20 @@ export default function TriggerDeliveryEditorClient({
     },
     [imagePreviewUrl],
   );
+  const canUseNegativeDelay = triggerType === "BIRTHDAY" || triggerType === "GIFT_EXPIRES";
   useEffect(() => {
-    const allowNegative = triggerType === "BIRTHDAY" || triggerType === "GIFT_EXPIRES";
-    if (!allowNegative && delayDays < 0) {
-      setDelayDays(0);
+    if (!canUseNegativeDelay && delayDirection === "past") {
+      setDelayDirection("future");
     }
-  }, [triggerType, delayDays]);
+  }, [canUseNegativeDelay, delayDirection]);
+  const delayDays = useMemo(() => {
+    const parsed = Number.parseInt(delayDayCountInput, 10);
+    const dayCount = Number.isFinite(parsed) ? Math.max(0, Math.min(365, Math.abs(parsed))) : 0;
+    if (!canUseNegativeDelay) {
+      return dayCount;
+    }
+    return delayDirection === "past" ? -dayCount : dayCount;
+  }, [canUseNegativeDelay, delayDayCountInput, delayDirection]);
 
   const openImagePicker = () => {
     setShowImageElement(true);
@@ -300,7 +314,6 @@ export default function TriggerDeliveryEditorClient({
     BIRTHDAY: "誕生日",
     GIFT_EXPIRES: "ギフト期限切れ",
   };
-  const canUseNegativeDelay = triggerType === "BIRTHDAY" || triggerType === "GIFT_EXPIRES";
   const genderOptions: Array<{ value: "male" | "female" | "other"; label: string }> = [
     { value: "male", label: "男性" },
     { value: "female", label: "女性" },
@@ -466,17 +479,54 @@ export default function TriggerDeliveryEditorClient({
                   <span className="text-xs font-semibold text-[#475569]">
                     トリガーからの日数（負数: n日前）
                   </span>
-                  <input
-                    type="number"
-                    min={canUseNegativeDelay ? -365 : 0}
-                    max={365}
-                    value={delayDays}
-                    onChange={(event) => {
-                      const min = canUseNegativeDelay ? -365 : 0;
-                      setDelayDays(Math.max(min, Math.min(365, Number(event.target.value || 0))));
-                    }}
-                    className="w-full rounded-lg border border-[#cbd5e1] bg-white px-3 py-2 text-sm outline-none focus:border-[#0f9f99]"
-                  />
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setDelayDirection("past")}
+                        disabled={!canUseNegativeDelay}
+                        className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
+                          delayDirection === "past"
+                            ? "border-[#0f766e] bg-[#ccfbf1] text-[#0f766e]"
+                            : "border-[#cbd5e1] bg-white text-[#475569]"
+                        } disabled:cursor-not-allowed disabled:opacity-50`}
+                      >
+                        過去
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDelayDirection("future")}
+                        className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
+                          delayDirection === "future"
+                            ? "border-[#0f766e] bg-[#ccfbf1] text-[#0f766e]"
+                            : "border-[#cbd5e1] bg-white text-[#475569]"
+                        }`}
+                      >
+                        未来
+                      </button>
+                    </div>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      value={delayDayCountInput}
+                      onChange={(event) => {
+                        const digitsOnly = event.target.value.replace(/[^\d]/g, "");
+                        setDelayDayCountInput(digitsOnly);
+                      }}
+                      onBlur={() => {
+                        if (!delayDayCountInput) {
+                          setDelayDayCountInput("0");
+                          return;
+                        }
+                        const parsed = Number.parseInt(delayDayCountInput, 10);
+                        const dayCount = Number.isFinite(parsed) ? Math.max(0, Math.min(365, Math.abs(parsed))) : 0;
+                        setDelayDayCountInput(String(dayCount));
+                      }}
+                      placeholder="日数"
+                      className="w-full rounded-lg border border-[#cbd5e1] bg-white px-3 py-2 text-sm outline-none focus:border-[#0f9f99]"
+                    />
+                  </div>
                 </label>
                 <label className="block space-y-1">
                   <span className="text-xs font-semibold text-[#475569]">配信時刻（JST）</span>
@@ -583,13 +633,26 @@ export default function TriggerDeliveryEditorClient({
                         </p>
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={openGiftSheet}
-                      className="rounded-lg border border-[#cbd5e1] px-4 py-2 text-sm font-semibold text-[#334155]"
-                    >
-                      変更
-                    </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedGift(null);
+                            setShowGiftElement(false);
+                            setIsGiftSheetOpen(false);
+                          }}
+                          className="rounded-lg border border-[#e2e8f0] px-3 py-2 text-sm font-semibold text-[#64748b]"
+                        >
+                          取り消し
+                        </button>
+                        <button
+                          type="button"
+                          onClick={openGiftSheet}
+                          className="rounded-lg border border-[#cbd5e1] px-4 py-2 text-sm font-semibold text-[#334155]"
+                        >
+                          変更
+                        </button>
+                      </div>
                   </div>
                 </div>
               </section>
