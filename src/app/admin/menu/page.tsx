@@ -2,6 +2,7 @@ import { requireAdminUser } from "@/lib/admin-guard";
 import Link from "next/link";
 
 const menuItems = [
+  { label: "希望シフト管理", href: "/admin/shifts" },
   { label: "ギフト管理", href: "/admin/gifts" },
   { label: "来店ガチャ設定", href: "/admin/visit-gacha" },
   { label: "会員設定", href: "/admin/member-settings" },

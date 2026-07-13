@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 
 import { rpcClient } from "@/orpc/client";
@@ -120,6 +120,12 @@ const defaultSurveyQuestions: SurveyQuestionConfig[] = [
   },
 ];
 const GOOGLE_REVIEW_URL = "https://www.google.com/maps/place/%E3%81%82%E3%81%AE%E5%91%B3%E3%81%8C%E6%81%8B%E3%81%97%E3%81%84%E3%80%82+%E3%81%8A%E3%81%B0%E3%82%93%E3%81%96%E3%81%84%E5%B1%85%E9%85%92%E5%B1%8B/@34.6795006,135.587742,17z/data=!4m8!3m7!1s0x6000df006ad5dbbf:0xa70695d1a3ce360b!8m2!3d34.6795006!4d135.587742!9m1!1b1!16s%2Fg%2F11w1rd8j5l?entry=ttu&g_ep=EgoyMDI2MDUwNi4wIKXMDSoASAFQAw%3D%3D";
+const LOCAL_HOME_DEV_USER_ID_KEY = "ajikoi-home-dev-user-id";
+
+function isLocalHost() {
+  if (typeof window === "undefined") return false;
+  return window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+}
 
 function todayAsYmd() {
   const date = new Date();
@@ -237,7 +243,7 @@ export default function Home() {
     pendingSurveyRef.current = pendingSurvey;
   }, [pendingSurvey]);
 
-  const fetchOwnedGifts = async (userId: string) => {
+  const fetchOwnedGifts = useCallback(async (userId: string) => {
     try {
       const result = await rpcClient.user.listOwnedGifts({
         userId,
@@ -246,15 +252,80 @@ export default function Home() {
     } catch {
       // ignore fetch error to keep top flow alive
     }
-  };
+  }, []);
+
+  const applyUserProfile = useCallback(async (userProfile: Profile) => {
+    setProfile(userProfile);
+    const syncResult = await rpcClient.user.upsertFromLiff({
+      userId: userProfile.userId,
+      displayName: userProfile.displayName,
+      pictureUrl: userProfile.pictureUrl,
+    });
+    setPoints(syncResult.points);
+    setUserRole(syncResult.role);
+    setCurrentRankName(syncResult.currentRankName);
+    setNextRankName(syncResult.nextRankName);
+    setPointsToNextRank(syncResult.pointsToNextRank);
+    setCheckedInToday(syncResult.checkedInToday);
+    setHasGoogleReview(syncResult.hasGoogleReview);
+    const publicStoreStatusPromise = rpcClient.user.getStoreStatus({});
+    if (syncResult.role === "staff") {
+      setPendingSurvey(false);
+    } else if (syncResult.hasSurvey) {
+      setPendingSurvey(false);
+    } else {
+      const surveyConfigResult = await rpcClient.user.getOnboardingSurveyQuestions({});
+      const questions = surveyConfigResult.questions as SurveyQuestionConfig[];
+      const activeQuestions = questions
+        .filter((question: SurveyQuestionConfig) => question.isEnabled)
+        .sort((a: SurveyQuestionConfig, b: SurveyQuestionConfig) => a.sortOrder - b.sortOrder);
+      setSurveyQuestions(questions.length > 0 ? questions : defaultSurveyQuestions);
+      setPendingSurvey(activeQuestions.length > 0);
+    }
+    setNeedsSurvey(false);
+    if (syncResult.role === "staff") {
+      const staffStatus = await rpcClient.user.getStaffStoreStatus({
+        userId: userProfile.userId,
+      });
+      setIsStaffPortal(staffStatus.authorized);
+      setStaffStoreIsOpen(staffStatus.isOpen);
+      setStaffCanOpen(staffStatus.canOpen);
+      setStaffCanClose(staffStatus.canClose);
+    } else {
+      setIsStaffPortal(false);
+      setStaffStoreIsOpen(false);
+      setStaffCanOpen(false);
+      setStaffCanClose(false);
+    }
+    if (syncResult.signupGiftTitle) {
+      setToastMessage(`会員登録特典「${syncResult.signupGiftTitle}」を獲得しました。`);
+      setTimeout(() => setToastMessage(null), 2600);
+    }
+    void fetchOwnedGifts(userProfile.userId);
+    void publicStoreStatusPromise
+      .then((publicStoreStatus) => {
+        setStoreIsOpen(publicStoreStatus.isOpen);
+      })
+      .catch(() => {
+        setStoreIsOpen(false);
+      });
+  }, [fetchOwnedGifts]);
 
   useEffect(() => {
     let cancelled = false;
 
     const initializeLiff = async () => {
       setIsProfileLoading(true);
-      if (!liffId) {
+      if (!liffId || isLocalHost()) {
         if (!cancelled) {
+          const savedUserId = window.localStorage.getItem(LOCAL_HOME_DEV_USER_ID_KEY);
+          if (savedUserId) {
+            await applyUserProfile({
+              userId: savedUserId,
+              displayName: savedUserId === "dev-staff" ? "ローカルスタッフ" : "ローカルユーザー",
+            });
+            setIsLineFriend(true);
+          }
           setIsProfileLoading(false);
         }
         return;
@@ -292,67 +363,9 @@ export default function Home() {
           return;
         }
 
-        // 起動時はまず users テーブル同期まで戻す（段階的に機能を戻す）
-        setProfile(userProfile);
-        const syncResult = await rpcClient.user.upsertFromLiff({
-          userId: userProfile.userId,
-          displayName: userProfile.displayName,
-          pictureUrl: userProfile.pictureUrl,
-        });
+        await applyUserProfile(userProfile);
         const syncedAt = performance.now();
-        setPoints(syncResult.points);
-        setUserRole(syncResult.role);
-        setCurrentRankName(syncResult.currentRankName);
-        setNextRankName(syncResult.nextRankName);
-        setPointsToNextRank(syncResult.pointsToNextRank);
-        setCheckedInToday(syncResult.checkedInToday);
-        setHasGoogleReview(syncResult.hasGoogleReview);
-        const publicStoreStatusPromise = rpcClient.user.getStoreStatus({});
-        if (syncResult.role === "staff") {
-          setPendingSurvey(false);
-        } else if (syncResult.hasSurvey) {
-          setPendingSurvey(false);
-        } else {
-          const surveyConfigResult = await rpcClient.user.getOnboardingSurveyQuestions({});
-          const questions = surveyConfigResult.questions as SurveyQuestionConfig[];
-          const activeQuestions = questions
-            .filter((question: SurveyQuestionConfig) => question.isEnabled)
-            .sort((a: SurveyQuestionConfig, b: SurveyQuestionConfig) => a.sortOrder - b.sortOrder);
-          setSurveyQuestions(questions.length > 0 ? questions : defaultSurveyQuestions);
-          setPendingSurvey(activeQuestions.length > 0);
-        }
-        setNeedsSurvey(false);
-        if (syncResult.role === "staff") {
-          const staffStatus = await rpcClient.user.getStaffStoreStatus({
-            userId: userProfile.userId,
-          });
-          setIsStaffPortal(staffStatus.authorized);
-          setStaffStoreIsOpen(staffStatus.isOpen);
-          setStaffCanOpen(staffStatus.canOpen);
-          setStaffCanClose(staffStatus.canClose);
-        } else {
-          setIsStaffPortal(false);
-          setStaffStoreIsOpen(false);
-          setStaffCanOpen(false);
-          setStaffCanClose(false);
-        }
-        if (syncResult.signupGiftTitle) {
-          setToastMessage(`会員登録特典「${syncResult.signupGiftTitle}」を獲得しました。`);
-          setTimeout(() => setToastMessage(null), 2600);
-        }
-        void fetchOwnedGifts(userProfile.userId);
         setIsProfileLoading(false);
-        void publicStoreStatusPromise
-          .then((publicStoreStatus) => {
-            if (!cancelled) {
-              setStoreIsOpen(publicStoreStatus.isOpen);
-            }
-          })
-          .catch(() => {
-            if (!cancelled) {
-              setStoreIsOpen(false);
-            }
-          });
         console.info("[liff-init-ms]", {
           importLiff: Math.round(importedAt - importStartedAt),
           liffInit: Math.round(initializedAt - importedAt),
@@ -374,7 +387,7 @@ export default function Home() {
       cancelled = true;
       liffRef.current = null;
     };
-  }, [liffId]);
+  }, [applyUserProfile, liffId]);
 
   const handleRefreshFriendship = async () => {
     if (isCheckingFriendship || !liffRef.current) return;
@@ -390,21 +403,47 @@ export default function Home() {
     }
   };
 
+  const handleDevLogin = async () => {
+    setIsProfileLoading(true);
+    setToastMessage(null);
+    try {
+      const result = await rpcClient.user.createDevStaffLogin({
+        displayName: "ローカルスタッフ",
+      });
+      const devProfile: Profile = {
+        userId: result.staff.userId,
+        displayName: result.staff.displayName,
+        pictureUrl: result.staff.pictureUrl ?? undefined,
+      };
+      window.localStorage.setItem(LOCAL_HOME_DEV_USER_ID_KEY, devProfile.userId);
+      setIsLineFriend(true);
+      setFriendshipError(null);
+      await applyUserProfile(devProfile);
+    } catch (error) {
+      setToastMessage(error instanceof Error ? error.message : "ローカルログインに失敗しました。");
+    } finally {
+      setIsProfileLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (!profile || typeof window === "undefined") return;
+    const deferNeedsSurvey = (value: boolean) => {
+      window.setTimeout(() => setNeedsSurvey(value), 0);
+    };
     if (userRole === "staff" || isStaffPortal) {
-      setNeedsSurvey(false);
+      deferNeedsSurvey(false);
       return;
     }
 
     const url = new URL(window.location.href);
     const checkinToken = url.searchParams.get("checkinToken")?.trim() ?? "";
     if (!checkinToken) {
-      setNeedsSurvey(pendingSurvey);
+      deferNeedsSurvey(pendingSurvey);
       return;
     }
     if (autoCheckinTokenRef.current === checkinToken) {
-      setNeedsSurvey(pendingSurvey);
+      deferNeedsSurvey(pendingSurvey);
       return;
     }
     autoCheckinTokenRef.current = checkinToken;
@@ -413,7 +452,7 @@ export default function Home() {
     if (checkedInToday) {
       url.searchParams.delete("checkinToken");
       window.history.replaceState({}, "", url.toString());
-      setNeedsSurvey(pendingSurveyRef.current);
+      deferNeedsSurvey(pendingSurveyRef.current);
       return;
     }
 
@@ -464,7 +503,7 @@ export default function Home() {
     };
 
     void runAutoCheckin();
-  }, [checkedInToday, isStaffPortal, pendingSurvey, profile, userRole]);
+  }, [checkedInToday, fetchOwnedGifts, isStaffPortal, pendingSurvey, profile, userRole]);
 
   useEffect(() => {
     const claimGiftFromQuery = async () => {
@@ -498,7 +537,7 @@ export default function Home() {
       }
     };
     void claimGiftFromQuery();
-  }, [profile]);
+  }, [fetchOwnedGifts, profile]);
 
   const progressToNextRank =
     nextRankName === null ? 100 : Math.min(((points + pointsToNextRank) === 0 ? 0 : (points / (points + pointsToNextRank)) * 100), 100);
@@ -529,7 +568,7 @@ export default function Home() {
       parsed.month !== birthDateDraft.month ||
       parsed.day !== birthDateDraft.day
     ) {
-      setBirthDateDraft(parsed);
+      window.setTimeout(() => setBirthDateDraft(parsed), 0);
     }
   }, [birthDateDraft.day, birthDateDraft.month, birthDateDraft.year, currentSurveyQuestion, surveyForm]);
 
@@ -706,6 +745,7 @@ export default function Home() {
         action,
       });
       setStaffStoreIsOpen(result.isOpen);
+      setStoreIsOpen(result.isOpen);
       setStaffToastMessage(result.isOpen ? "開店しました。" : "閉店しました。");
       setTimeout(() => setStaffToastMessage(null), 2200);
     } catch (error) {
@@ -716,39 +756,26 @@ export default function Home() {
     }
   };
 
-  if (!isProfileLoading && isStaffPortal && userRole === "staff") {
-    const canToggle = staffStoreIsOpen ? staffCanClose : staffCanOpen;
+  const showStaffActions = !isProfileLoading && isStaffPortal && userRole === "staff";
+  const canToggleStore = staffStoreIsOpen ? staffCanClose : staffCanOpen;
+
+  if (!isProfileLoading && isLocalHost() && !profile) {
     return (
-      <main className="mx-auto flex min-h-screen w-full max-w-md flex-col items-center justify-center bg-[#f3f4f7] px-6 text-[#1f2937]">
+      <main className="mx-auto flex min-h-screen w-full max-w-md items-center justify-center bg-[#f3f4f7] px-6 text-[#1f2937]">
         <section className="w-full rounded-2xl bg-white px-6 py-8 text-center shadow-sm">
-          <p className="text-sm font-semibold text-[#0f766e]">STAFF MODE</p>
-          <h1 className="mt-2 text-2xl font-bold">スタッフアカウントです</h1>
-          <p className="mt-3 text-base font-semibold text-[#0f172a]">
-            現在: {staffStoreIsOpen ? "開店中" : "閉店中"}
-          </p>
+          <p className="text-sm font-semibold text-[#0f766e]">LOCAL LOGIN</p>
+          <h1 className="mt-2 text-2xl font-bold">仮ユーザーでログイン</h1>
           <p className="mt-3 text-sm leading-6 text-[#64748b]">
-            店舗の状態を切り替えると、会員向け画面の営業状態に反映できます。
+            ローカル開発ではLINEログインの代わりに、開発用スタッフとしてトップ画面を確認できます。
           </p>
           <button
             type="button"
-            onClick={() => void handleStaffStoreToggle()}
-            disabled={!canToggle || isUpdatingStoreStatus}
-            className="mt-5 w-full rounded-lg bg-[#0f766e] px-4 py-3 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-[#94a3b8]"
+            onClick={() => void handleDevLogin()}
+            className="mt-5 w-full rounded-lg bg-[#0f766e] px-4 py-3 text-sm font-bold text-white"
           >
-            {isUpdatingStoreStatus
-              ? "更新中..."
-              : staffStoreIsOpen
-                ? "閉店する"
-                : "開店する"}
+            ローカルスタッフで入る
           </button>
-          {!canToggle ? (
-            <p className="mt-2 text-xs text-[#b91c1c]">
-              {staffStoreIsOpen ? "閉店権限がありません。" : "開店権限がありません。"}
-            </p>
-          ) : null}
-          {staffToastMessage ? (
-            <p className="mt-3 text-xs font-semibold text-[#334155]">{staffToastMessage}</p>
-          ) : null}
+          {toastMessage ? <p className="mt-3 text-xs font-semibold text-[#b91c1c]">{toastMessage}</p> : null}
         </section>
       </main>
     );
@@ -1004,6 +1031,71 @@ export default function Home() {
         )}
         </section>
       </main>
+      {showStaffActions ? (
+        <>
+          <div className="pointer-events-none fixed inset-x-0 bottom-5 z-40 mx-auto w-full max-w-md px-4">
+            {(staffToastMessage || !canToggleStore) ? (
+              <p className={`pointer-events-auto ml-auto mb-2 w-fit rounded-full bg-white px-3 py-2 text-xs font-semibold shadow-lg ${
+                staffToastMessage ? "text-[#334155]" : "text-[#b91c1c]"
+              }`}>
+                {staffToastMessage ?? (staffStoreIsOpen ? "閉店権限がありません。" : "開店権限がありません。")}
+              </p>
+            ) : null}
+            <div className="ml-auto flex w-fit items-center gap-3">
+            <Link
+              href="/staff/shifts"
+              aria-label="スタッフシフトを確認"
+              className="pointer-events-auto flex h-14 w-14 flex-col items-center justify-center rounded-full bg-[#0f766e] text-[10px] font-bold text-white shadow-lg"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                className="h-5 w-5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <rect x="4" y="5" width="16" height="15" rx="2" />
+                <path d="M8 3v4" />
+                <path d="M16 3v4" />
+                <path d="M4 10h16" />
+                <path d="M8 14h2" />
+                <path d="M14 14h2" />
+              </svg>
+              <span className="mt-0.5">シフト</span>
+            </Link>
+            <button
+              type="button"
+              onClick={() => void handleStaffStoreToggle()}
+              disabled={!canToggleStore || isUpdatingStoreStatus}
+              aria-label={staffStoreIsOpen ? "閉店する" : "開店する"}
+              className={`pointer-events-auto flex h-14 w-14 flex-col items-center justify-center rounded-full text-[10px] font-bold text-white shadow-lg disabled:cursor-not-allowed disabled:bg-[#94a3b8] ${
+                staffStoreIsOpen ? "bg-[#dc2626]" : "bg-[#16a34a]"
+              }`}
+            >
+              <svg
+                viewBox="0 0 24 24"
+                className="h-5 w-5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M4 10h16" />
+                <path d="M5 10l1-5h12l1 5" />
+                <path d="M6 10v9h12v-9" />
+                <path d="M9 19v-5h6v5" />
+              </svg>
+              <span className="mt-0.5">{isUpdatingStoreStatus ? "更新" : staffStoreIsOpen ? "閉店" : "開店"}</span>
+            </button>
+            </div>
+          </div>
+        </>
+      ) : null}
       {isGachaJudging ? (
         <div className="fixed inset-0 z-55 flex flex-col items-center justify-center gap-3 bg-white/35 backdrop-blur-sm">
           <div

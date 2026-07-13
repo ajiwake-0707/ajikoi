@@ -12,6 +12,7 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
     "db:seed:report": "node scripts/seed-report-data.mjs",
+    "db:seed:staff-shifts": "node scripts/seed-staff-shifts.mjs",
     "db:seed:gift-templates": "node scripts/seed-gift-templates.mjs",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down"

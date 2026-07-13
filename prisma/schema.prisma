@@ -29,6 +29,8 @@ model User {
   histories                 UserHistory[]
   userGifts                 UserGift[]
   storeOperationPermissions StaffStoreOperationPermission[]
+  staffShiftSubmissions     StaffShiftSubmission[]
+  staffShiftAssignments     StaffShiftAssignment[]
   createdAt                 DateTime                        @default(now())
   updatedAt                 DateTime                        @updatedAt
 
@@ -48,6 +50,12 @@ model GoogleReview {
 
 enum UserRole {
   staff
+}
+
+enum StaffShiftAvailabilityStatus {
+  UNSET
+  AVAILABLE
+  UNAVAILABLE
 }
 
 model UserSurvey {
@@ -252,6 +260,8 @@ model OfficialAccount {
   visitGachaSettings               VisitGachaSetting[]
   lineDeliveryTriggerSettings      LineDeliveryTriggerSetting[]
   staffOperationPermissions        StaffStoreOperationPermission[]
+  staffShiftSubmissions            StaffShiftSubmission[]
+  staffShiftSchedules              StaffShiftSchedule[]
   memberBenefitSettings            MemberBenefitSetting[]
   storeStatus                      StoreStatus?
   createdAt                        DateTime                          @default(now())
@@ -353,6 +363,73 @@ model StaffStoreOperationPermission {
   @@unique([userId, officialAccountId])
   @@index([officialAccountId])
   @@map("staff_store_operation_permissions")
+}
+
+model StaffShiftSubmission {
+  id                String                   @id @default(cuid())
+  userId            String
+  officialAccountId String
+  month             String
+  submittedAt       DateTime?
+  user              User                     @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  officialAccount   OfficialAccount          @relation(fields: [officialAccountId], references: [id], onDelete: Cascade)
+  entries           StaffShiftAvailability[]
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+
+  @@unique([userId, officialAccountId, month])
+  @@index([officialAccountId, month])
+  @@index([userId, month])
+  @@map("staff_shift_submissions")
+}
+
+model StaffShiftAvailability {
+  id           String                       @id @default(cuid())
+  submissionId String
+  day          Int
+  status       StaffShiftAvailabilityStatus @default(UNSET)
+  startTime    String?
+  endTime      String?
+  memo         String?
+  submission   StaffShiftSubmission         @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  createdAt    DateTime                     @default(now())
+  updatedAt    DateTime                     @updatedAt
+
+  @@unique([submissionId, day])
+  @@index([status])
+  @@map("staff_shift_availabilities")
+}
+
+model StaffShiftSchedule {
+  id                String                 @id @default(cuid())
+  officialAccountId String
+  month             String
+  officialAccount   OfficialAccount        @relation(fields: [officialAccountId], references: [id], onDelete: Cascade)
+  assignments       StaffShiftAssignment[]
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+
+  @@unique([officialAccountId, month])
+  @@index([officialAccountId, month])
+  @@map("staff_shift_schedules")
+}
+
+model StaffShiftAssignment {
+  id         String             @id @default(cuid())
+  scheduleId String
+  userId     String
+  day        Int
+  startTime  String
+  endTime    String
+  memo       String?
+  schedule   StaffShiftSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  user       User               @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  createdAt  DateTime           @default(now())
+  updatedAt  DateTime           @updatedAt
+
+  @@index([scheduleId, day])
+  @@index([userId])
+  @@map("staff_shift_assignments")
 }
 
 model StoreStatus {

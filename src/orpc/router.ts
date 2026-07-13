@@ -37,6 +37,7 @@ type LineDeliveryTriggerTypeValue =
   | "GIFT_EXPIRES";
 type DeliveryVisitCountSegmentValue = "ZERO" | "ONE" | "TWO_TO_FOUR" | "FIVE_TO_NINE" | "TEN_OR_MORE";
 type UserRoleValue = "staff";
+type StaffShiftAvailabilityStatusValue = "UNSET" | "AVAILABLE" | "UNAVAILABLE";
 type CachedRank = {
   id: string;
   name: string;
@@ -146,6 +147,62 @@ async function resolveOfficialAccountId() {
     expiresAt: now + OFFICIAL_ACCOUNT_CACHE_TTL_MS,
   };
   return resolvedId;
+}
+
+function isValidShiftMonth(month: string) {
+  return /^\d{4}-(0[1-9]|1[0-2])$/.test(month);
+}
+
+function getDaysInShiftMonth(month: string) {
+  if (!isValidShiftMonth(month)) return 31;
+  const [year, monthIndex] = month.split("-").map(Number);
+  return new Date(year, monthIndex, 0).getDate();
+}
+
+async function resolveStaffScope(userId: string) {
+  const officialAccountId = await resolveOfficialAccountId();
+  const user = await prisma.user.findUnique({
+    where: { userId },
+    select: {
+      userId: true,
+      displayName: true,
+      role: true,
+      officialAccountId: true,
+    },
+  });
+  if (!user) {
+    throw new Error("ユーザーが見つかりません。");
+  }
+
+  const scopedOfficialAccountId =
+    officialAccountId ?? (process.env.NODE_ENV !== "production" ? user.officialAccountId : null);
+  if (!scopedOfficialAccountId) {
+    throw new Error("公式アカウント設定が見つかりません。");
+  }
+  if (user.role !== "staff" || user.officialAccountId !== scopedOfficialAccountId) {
+    throw new Error("スタッフ権限がありません。");
+  }
+
+  const permission = await prisma.staffStoreOperationPermission.findUnique({
+    where: {
+      userId_officialAccountId: {
+        userId: user.userId,
+        officialAccountId: scopedOfficialAccountId,
+      },
+    },
+    select: {
+      id: true,
+    },
+  });
+  if (!permission) {
+    throw new Error("スタッフ権限がありません。");
+  }
+
+  return {
+    userId: user.userId,
+    displayName: user.displayName,
+    officialAccountId: scopedOfficialAccountId,
+  };
 }
 
 async function ensureOnboardingSurveySettings(officialAccountId: string | null) {
@@ -1639,18 +1696,15 @@ export const appRouter = {
           };
         }
 
-        const existingStatus = await prisma.storeStatus.findUnique({
+        const status = await prisma.storeStatus.upsert({
           where: { officialAccountId },
+          create: {
+            officialAccountId,
+            isOpen: false,
+          },
+          update: {},
           select: { isOpen: true },
         });
-        const status = existingStatus
-          ?? (await prisma.storeStatus.create({
-            data: {
-              officialAccountId,
-              isOpen: false,
-            },
-            select: { isOpen: true },
-          }));
 
         return {
           ok: true,
@@ -1671,18 +1725,15 @@ export const appRouter = {
           };
         }
 
-        const existingStatus = await prisma.storeStatus.findUnique({
+        const status = await prisma.storeStatus.upsert({
           where: { officialAccountId },
+          create: {
+            officialAccountId,
+            isOpen: false,
+          },
+          update: {},
           select: { isOpen: true },
         });
-        const status = existingStatus
-          ?? (await prisma.storeStatus.create({
-            data: {
-              officialAccountId,
-              isOpen: false,
-            },
-            select: { isOpen: true },
-          }));
 
         return {
           ok: true,
@@ -1757,6 +1808,304 @@ export const appRouter = {
         return {
           ok: true,
           isOpen: status.isOpen,
+        };
+      }),
+    listStaffLoginOptions: os
+      .input(z.object({}))
+      .handler(async () => {
+        if (process.env.NODE_ENV === "production") {
+          return {
+            ok: true,
+            staff: [],
+          };
+        }
+
+        const officialAccountId = await resolveOfficialAccountId();
+        const permissions = await prisma.staffStoreOperationPermission.findMany({
+          where: officialAccountId ? { officialAccountId } : undefined,
+          orderBy: {
+            createdAt: "desc",
+          },
+          select: {
+            officialAccountId: true,
+            user: {
+              select: {
+                userId: true,
+                displayName: true,
+                pictureUrl: true,
+                role: true,
+              },
+            },
+          },
+          take: 50,
+        });
+
+        return {
+          ok: true,
+          staff: permissions
+            .filter((permission) => permission.user.role === "staff")
+            .map((permission) => ({
+              userId: permission.user.userId,
+              displayName: permission.user.displayName,
+              pictureUrl: permission.user.pictureUrl,
+              officialAccountId: permission.officialAccountId,
+            })),
+        };
+      }),
+    createDevStaffLogin: os
+      .input(
+        z.object({
+          displayName: z.string().trim().min(1).max(40).optional().default("ローカルスタッフ"),
+        }),
+      )
+      .handler(async ({ input }) => {
+        if (process.env.NODE_ENV === "production") {
+          throw new Error("開発環境でのみ利用できます。");
+        }
+
+        let officialAccountId = await resolveOfficialAccountId();
+        if (!officialAccountId) {
+          const account = await prisma.officialAccount.upsert({
+            where: { lineBasicId: "local-dev" },
+            create: {
+              lineBasicId: "local-dev",
+              name: "ローカル開発店舗",
+            },
+            update: {
+              name: "ローカル開発店舗",
+            },
+            select: { id: true },
+          });
+          officialAccountId = account.id;
+        }
+
+        const userId = "dev-staff";
+        const user = await prisma.user.upsert({
+          where: { userId },
+          create: {
+            userId,
+            displayName: input.displayName,
+            role: "staff",
+            officialAccountId,
+            officialLinkedAt: new Date(),
+          },
+          update: {
+            displayName: input.displayName,
+            role: "staff",
+            officialAccountId,
+            officialLinkedAt: new Date(),
+          },
+          select: {
+            userId: true,
+            displayName: true,
+            pictureUrl: true,
+          },
+        });
+
+        await prisma.staffStoreOperationPermission.upsert({
+          where: {
+            userId_officialAccountId: {
+              userId: user.userId,
+              officialAccountId,
+            },
+          },
+          create: {
+            userId: user.userId,
+            officialAccountId,
+            canOpen: true,
+            canClose: true,
+          },
+          update: {
+            canOpen: true,
+            canClose: true,
+          },
+        });
+
+        return {
+          ok: true,
+          staff: {
+            userId: user.userId,
+            displayName: user.displayName,
+            pictureUrl: user.pictureUrl,
+            officialAccountId,
+          },
+        };
+      }),
+    getStaffShiftSubmission: os
+      .input(
+        z.object({
+          userId: z.string().min(1),
+          month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "対象月が不正です。"),
+        }),
+      )
+      .handler(async ({ input }) => {
+        const scope = await resolveStaffScope(input.userId);
+        const [submission, schedule] = await Promise.all([
+          prisma.staffShiftSubmission.findUnique({
+            where: {
+              userId_officialAccountId_month: {
+                userId: scope.userId,
+                officialAccountId: scope.officialAccountId,
+                month: input.month,
+              },
+            },
+            select: {
+              id: true,
+              submittedAt: true,
+              updatedAt: true,
+              entries: {
+                orderBy: { day: "asc" },
+                select: {
+                  day: true,
+                  status: true,
+                  startTime: true,
+                  endTime: true,
+                  memo: true,
+                },
+              },
+            },
+          }),
+          prisma.staffShiftSchedule.findUnique({
+          where: {
+            officialAccountId_month: {
+              officialAccountId: scope.officialAccountId,
+              month: input.month,
+            },
+          },
+          select: {
+            assignments: {
+              where: { userId: scope.userId },
+              orderBy: [{ day: "asc" }, { startTime: "asc" }],
+              select: {
+                day: true,
+                startTime: true,
+                endTime: true,
+                memo: true,
+              },
+            },
+          },
+          }),
+        ]);
+
+        return {
+          ok: true,
+          staffName: scope.displayName,
+          month: input.month,
+          submittedAt: submission?.submittedAt?.toISOString() ?? null,
+          updatedAt: submission?.updatedAt.toISOString() ?? null,
+          entries: (submission?.entries ?? []).map((entry) => ({
+            day: entry.day,
+            status: entry.status as StaffShiftAvailabilityStatusValue,
+            startTime: entry.startTime,
+            endTime: entry.endTime,
+            memo: entry.memo,
+          })),
+          confirmedAssignments: (schedule?.assignments ?? []).map((assignment) => ({
+            day: assignment.day,
+            startTime: assignment.startTime,
+            endTime: assignment.endTime,
+            memo: assignment.memo,
+          })),
+        };
+      }),
+    saveStaffShiftSubmission: os
+      .input(
+        z.object({
+          userId: z.string().min(1),
+          month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "対象月が不正です。"),
+          entries: z.array(
+            z.object({
+              day: z.number().int().min(1).max(31),
+              status: z.enum(["UNSET", "AVAILABLE", "UNAVAILABLE"]),
+              startTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
+              endTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
+              memo: z.string().trim().max(200).nullable().optional(),
+            }),
+          ),
+        }),
+      )
+      .handler(async ({ input }) => {
+        const scope = await resolveStaffScope(input.userId);
+        const existingSubmission = await prisma.staffShiftSubmission.findUnique({
+          where: {
+            userId_officialAccountId_month: {
+              userId: scope.userId,
+              officialAccountId: scope.officialAccountId,
+              month: input.month,
+            },
+          },
+          select: {
+            id: true,
+            submittedAt: true,
+          },
+        });
+        if (existingSubmission?.submittedAt) {
+          throw new Error("提出済みの希望シフトは修正できません。");
+        }
+
+        const daysInMonth = getDaysInShiftMonth(input.month);
+        const normalizedEntries = input.entries
+          .filter((entry) => entry.day <= daysInMonth)
+          .map((entry) => ({
+            day: entry.day,
+            status: entry.status,
+            startTime: entry.status === "AVAILABLE" ? (entry.startTime ?? null) : null,
+            endTime: entry.status === "AVAILABLE" ? (entry.endTime ?? null) : null,
+            memo: entry.memo?.trim() || null,
+          }));
+
+        for (const entry of normalizedEntries) {
+          if (entry.status === "AVAILABLE" && (!entry.startTime || !entry.endTime)) {
+            throw new Error(`${entry.day}日の出勤可能時間を入力してください。`);
+          }
+          if (entry.status === "AVAILABLE" && entry.startTime && entry.endTime && entry.startTime >= entry.endTime) {
+            throw new Error(`${entry.day}日の終了時刻は開始時刻より後にしてください。`);
+          }
+        }
+
+        const submission = await prisma.staffShiftSubmission.upsert({
+          where: {
+            userId_officialAccountId_month: {
+              userId: scope.userId,
+              officialAccountId: scope.officialAccountId,
+              month: input.month,
+            },
+          },
+          create: {
+            userId: scope.userId,
+            officialAccountId: scope.officialAccountId,
+            month: input.month,
+            submittedAt: new Date(),
+          },
+          update: {
+            submittedAt: new Date(),
+          },
+          select: {
+            id: true,
+          },
+        });
+
+        await prisma.$transaction(async (tx) => {
+          await tx.staffShiftAvailability.deleteMany({
+            where: { submissionId: submission.id },
+          });
+          if (normalizedEntries.length > 0) {
+            await tx.staffShiftAvailability.createMany({
+              data: normalizedEntries.map((entry) => ({
+                submissionId: submission.id,
+                day: entry.day,
+                status: entry.status,
+                startTime: entry.startTime,
+                endTime: entry.endTime,
+                memo: entry.memo,
+              })),
+            });
+          }
+        });
+
+        return {
+          ok: true,
+          submittedAt: new Date().toISOString(),
         };
       }),
     getOnboardingSurveyQuestions: os
