@@ -487,14 +487,14 @@ export default function StaffShiftsClient() {
       </header>
 
       <section className="mt-4 rounded-2xl bg-white p-4 shadow-sm">
-        <label className="block">
+        <label className="block min-w-0">
           <span className="mb-1 block text-sm font-semibold text-[#334155]">対象月</span>
           <input
             type="month"
             value={month}
             min={minimumShiftMonth}
             onChange={(event) => handleMonthChange(event.target.value)}
-            className="w-full rounded-lg border border-[#cbd5e1] px-3 py-3 text-base font-semibold outline-none focus:border-[#0f766e]"
+            className="min-w-0 w-full rounded-lg border border-[#cbd5e1] px-3 py-3 text-base font-semibold outline-none focus:border-[#0f766e]"
           />
         </label>
         {!isConfirmed ? (
@@ -714,24 +714,24 @@ export default function StaffShiftsClient() {
 
             {selectedEntry.status === "AVAILABLE" ? (
               <div className="mt-3 grid grid-cols-2 gap-2">
-                <label className="block">
+                <label className="block min-w-0">
                   <span className="mb-1 block text-xs font-semibold text-[#64748b]">開始</span>
                   <input
                     type="time"
                     value={selectedEntry.startTime}
                     onChange={(event) => updateEntry(selectedEntry.day, { startTime: event.target.value })}
                     disabled={isSubmitted}
-                    className="w-full rounded-lg border border-[#cbd5e1] px-3 py-3 text-base font-semibold outline-none focus:border-[#0f766e]"
+                    className="min-w-0 w-full rounded-lg border border-[#cbd5e1] px-3 py-3 text-base font-semibold outline-none focus:border-[#0f766e]"
                   />
                 </label>
-                <label className="block">
+                <label className="block min-w-0">
                   <span className="mb-1 block text-xs font-semibold text-[#64748b]">終了</span>
                   <input
                     type="time"
                     value={selectedEntry.endTime}
                     onChange={(event) => updateEntry(selectedEntry.day, { endTime: event.target.value })}
                     disabled={isSubmitted}
-                    className="w-full rounded-lg border border-[#cbd5e1] px-3 py-3 text-base font-semibold outline-none focus:border-[#0f766e]"
+                    className="min-w-0 w-full rounded-lg border border-[#cbd5e1] px-3 py-3 text-base font-semibold outline-none focus:border-[#0f766e]"
                   />
                 </label>
               </div>
