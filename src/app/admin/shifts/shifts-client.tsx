@@ -38,6 +38,15 @@ type AutoReflectConflict = {
   candidates: ShiftAssignment[];
 };
 
+type EditingAvailability = {
+  userId: string;
+  displayName: string;
+  day: number;
+  status: ShiftStatus;
+  startTime: string;
+  endTime: string;
+};
+
 type Props = {
   month: string;
   staff: StaffShiftRow[];
@@ -143,6 +152,10 @@ export default function AdminShiftsClient({ month, staff, initialAssignments }: 
   const [autoReflectConflicts, setAutoReflectConflicts] = useState<AutoReflectConflict[]>([]);
   const [activeConflictIndex, setActiveConflictIndex] = useState(0);
   const [selectedConflictCandidateIds, setSelectedConflictCandidateIds] = useState<string[]>([]);
+  const [editingAvailability, setEditingAvailability] = useState<EditingAvailability | null>(null);
+  const [isSavingAvailability, setIsSavingAvailability] = useState(false);
+  const [availabilityMessage, setAvailabilityMessage] = useState<string | null>(null);
+  const [releasingSubmissionKey, setReleasingSubmissionKey] = useState<string | null>(null);
   const days = useMemo(() => Array.from({ length: getDaysInMonth(month) }, (_, index) => index + 1), [month]);
   const submittedCount = staff.filter((row) => row.submittedAt).length;
   const totalCount = staff.length;
@@ -171,6 +184,108 @@ export default function AdminShiftsClient({ month, staff, initialAssignments }: 
 
   const handleMonthChange = (nextMonth: string) => {
     router.push(`/admin/shifts?month=${encodeURIComponent(nextMonth)}`);
+  };
+
+  const handleOpenAvailabilityEdit = (row: StaffShiftRow, day: number, entry: ShiftEntry | undefined) => {
+    setAvailabilityMessage(null);
+    setEditingAvailability({
+      userId: row.userId,
+      displayName: row.displayName,
+      day,
+      status: entry?.status ?? "UNSET",
+      startTime: entry?.startTime ?? "18:00",
+      endTime: entry?.endTime ?? "23:00",
+    });
+  };
+
+  const updateEditingAvailability = (patch: Partial<EditingAvailability>) => {
+    setEditingAvailability((prev) => (prev ? { ...prev, ...patch } : prev));
+  };
+
+  const handleSaveAvailability = async () => {
+    if (!editingAvailability || isSavingAvailability) return;
+    setIsSavingAvailability(true);
+    setAvailabilityMessage(null);
+    try {
+      const response = await fetch("/api/admin/shifts/submission", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: editingAvailability.userId,
+          month,
+          day: editingAvailability.day,
+          status: editingAvailability.status,
+          startTime: editingAvailability.status === "AVAILABLE" ? editingAvailability.startTime : null,
+          endTime: editingAvailability.status === "AVAILABLE" ? editingAvailability.endTime : null,
+        }),
+      });
+      const json = (await response.json()) as { ok?: boolean; message?: string };
+      if (!response.ok || !json.ok) {
+        throw new Error(json.message ?? "希望シフトの修正に失敗しました。");
+      }
+      setEditingAvailability(null);
+      setAvailabilityMessage("希望シフトを修正しました。");
+      router.refresh();
+    } catch (error) {
+      setAvailabilityMessage(error instanceof Error ? error.message : "希望シフトの修正に失敗しました。");
+    } finally {
+      setIsSavingAvailability(false);
+    }
+  };
+
+  const handleDeleteAvailability = async () => {
+    if (!editingAvailability || isSavingAvailability) return;
+    setIsSavingAvailability(true);
+    setAvailabilityMessage(null);
+    try {
+      const response = await fetch("/api/admin/shifts/submission", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: editingAvailability.userId,
+          month,
+          day: editingAvailability.day,
+        }),
+      });
+      const json = (await response.json()) as { ok?: boolean; message?: string };
+      if (!response.ok || !json.ok) {
+        throw new Error(json.message ?? "希望シフトの削除に失敗しました。");
+      }
+      setEditingAvailability(null);
+      setAvailabilityMessage("希望シフトを削除しました。");
+      router.refresh();
+    } catch (error) {
+      setAvailabilityMessage(error instanceof Error ? error.message : "希望シフトの削除に失敗しました。");
+    } finally {
+      setIsSavingAvailability(false);
+    }
+  };
+
+  const handleReleaseSubmission = async (row: StaffShiftRow) => {
+    const key = `${row.userId}:${row.officialAccountId}`;
+    if (releasingSubmissionKey) return;
+    setReleasingSubmissionKey(key);
+    setAvailabilityMessage(null);
+    try {
+      const response = await fetch("/api/admin/shifts/submission", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: row.userId,
+          month,
+        }),
+      });
+      const json = (await response.json()) as { ok?: boolean; message?: string };
+      if (!response.ok || !json.ok) {
+        throw new Error(json.message ?? "提出状態の解除に失敗しました。");
+      }
+      setAvailabilityMessage(`${row.displayName}さんの提出状態を解除しました。`);
+      router.refresh();
+    } catch (error) {
+      setAvailabilityMessage(error instanceof Error ? error.message : "提出状態の解除に失敗しました。");
+    } finally {
+      setReleasingSubmissionKey(null);
+    }
   };
 
   const handleAddAssignment = () => {
@@ -359,6 +474,11 @@ export default function AdminShiftsClient({ month, staff, initialAssignments }: 
             <span className="rounded-full bg-[#fff1f2] px-2 py-1 text-[#be123c]">休み</span>
           </div>
         </div>
+        {availabilityMessage ? (
+          <p className="mb-3 rounded-lg bg-[#f8fafc] px-3 py-2 text-sm font-semibold text-[#334155]">
+            {availabilityMessage}
+          </p>
+        ) : null}
         {normalizedStaff.length === 0 ? (
           <p className="text-sm text-[#64748b]">スタッフが登録されていません。</p>
         ) : (
@@ -382,19 +502,36 @@ export default function AdminShiftsClient({ month, staff, initialAssignments }: 
                   <tr key={`${row.userId}:${row.officialAccountId}`}>
                     <th className="sticky left-0 z-10 rounded-lg bg-white px-3 py-2 text-left align-top shadow-sm">
                       <span className="block font-bold text-[#0f172a]">{row.displayName}</span>
-                      <span className={`mt-1 inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${
-                        row.submittedAt ? "bg-[#ecfdf5] text-[#0f766e]" : "bg-[#fff1f2] text-[#be123c]"
-                      }`}>
+                      <span
+                        className={`mt-1 inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${
+                          row.submittedAt ? "bg-[#ecfdf5] text-[#0f766e]" : "bg-[#fff1f2] text-[#be123c]"
+                        }`}
+                      >
                         {row.submittedAt ? "提出済み" : "未提出"}
                       </span>
+                      {row.submittedAt ? (
+                        <button
+                          type="button"
+                          onClick={() => void handleReleaseSubmission(row)}
+                          disabled={releasingSubmissionKey === `${row.userId}:${row.officialAccountId}`}
+                          className="mt-2 block rounded border border-[#cbd5e1] px-2 py-1 text-xs font-bold text-[#334155] disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {releasingSubmissionKey === `${row.userId}:${row.officialAccountId}` ? "解除中..." : "提出解除"}
+                        </button>
+                      ) : null}
                     </th>
                     {days.map((day) => {
                       const entry = row.entryByDay.get(day);
                       return (
                         <td key={day} className="align-top">
-                          <div className={`min-h-12 rounded-lg px-2 py-2 text-center text-xs font-semibold ${resolveEntryClassName(entry)}`}>
+                          <button
+                            type="button"
+                            onClick={() => handleOpenAvailabilityEdit(row, day, entry)}
+                            className={`min-h-12 w-full rounded-lg px-2 py-2 text-center text-xs font-semibold transition hover:ring-2 hover:ring-[#0f766e] hover:ring-offset-1 ${resolveEntryClassName(entry)}`}
+                            title={`${row.displayName} ${day}日を修正`}
+                          >
                             {resolveEntryLabel(entry)}
-                          </div>
+                          </button>
                         </td>
                       );
                     })}
@@ -540,6 +677,93 @@ export default function AdminShiftsClient({ month, staff, initialAssignments }: 
           </table>
         </div>
       </section>
+
+      {editingAvailability ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <section className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-[#0f766e]">希望シフトを修正</p>
+                <h2 className="mt-1 text-xl font-bold">
+                  {editingAvailability.displayName} / {editingAvailability.day}日(
+                  {getWeekdayLabel(month, editingAvailability.day)})
+                </h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingAvailability(null)}
+                aria-label="閉じる"
+                className="flex h-9 w-9 items-center justify-center rounded-full bg-[#f1f5f9] text-xl font-bold text-[#334155]"
+              >
+                ×
+              </button>
+            </div>
+
+            <label className="mt-4 block">
+              <span className="mb-1 block text-xs font-semibold text-[#64748b]">希望</span>
+              <select
+                value={editingAvailability.status}
+                onChange={(event) => updateEditingAvailability({ status: event.target.value as ShiftStatus })}
+                className="w-full rounded-lg border border-[#cbd5e1] bg-white px-3 py-3 text-base font-semibold outline-none focus:border-[#0f766e]"
+              >
+                <option value="UNSET">未定</option>
+                <option value="AVAILABLE">出勤可</option>
+                <option value="UNAVAILABLE">休み希望</option>
+              </select>
+            </label>
+
+            {editingAvailability.status === "AVAILABLE" ? (
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <label className="block min-w-0">
+                  <span className="mb-1 block text-xs font-semibold text-[#64748b]">開始</span>
+                  <input
+                    type="time"
+                    value={editingAvailability.startTime}
+                    onChange={(event) => updateEditingAvailability({ startTime: event.target.value })}
+                    className="min-w-0 w-full rounded-lg border border-[#cbd5e1] px-3 py-3 text-base font-semibold outline-none focus:border-[#0f766e]"
+                  />
+                </label>
+                <label className="block min-w-0">
+                  <span className="mb-1 block text-xs font-semibold text-[#64748b]">終了</span>
+                  <input
+                    type="time"
+                    value={editingAvailability.endTime}
+                    onChange={(event) => updateEditingAvailability({ endTime: event.target.value })}
+                    className="min-w-0 w-full rounded-lg border border-[#cbd5e1] px-3 py-3 text-base font-semibold outline-none focus:border-[#0f766e]"
+                  />
+                </label>
+              </div>
+            ) : null}
+
+            <button
+              type="button"
+              onClick={() => void handleDeleteAvailability()}
+              disabled={isSavingAvailability}
+              className="mt-4 w-full rounded-lg border border-[#fecdd3] bg-[#fff1f2] px-4 py-3 text-sm font-bold text-[#be123c] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              この日の希望を削除
+            </button>
+
+            <div className="mt-5 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setEditingAvailability(null)}
+                className="rounded-lg border border-[#cbd5e1] px-4 py-3 text-sm font-bold text-[#334155]"
+              >
+                キャンセル
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleSaveAvailability()}
+                disabled={isSavingAvailability}
+                className="rounded-lg bg-[#0f766e] px-4 py-3 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-[#94a3b8]"
+              >
+                {isSavingAvailability ? "保存中..." : "保存"}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {autoReflectConflicts[activeConflictIndex] ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
