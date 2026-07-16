@@ -390,6 +390,7 @@ model StaffShiftAvailability {
   status       StaffShiftAvailabilityStatus @default(UNSET)
   startTime    String?
   endTime      String?
+  isFree       Boolean                      @default(false)
   memo         String?
   submission   StaffShiftSubmission         @relation(fields: [submissionId], references: [id], onDelete: Cascade)
   createdAt    DateTime                     @default(now())
@@ -419,8 +420,9 @@ model StaffShiftAssignment {
   scheduleId String
   userId     String
   day        Int
-  startTime  String
-  endTime    String
+  startTime  String?
+  endTime    String?
+  isFree     Boolean            @default(false)
   memo       String?
   schedule   StaffShiftSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
   user       User               @relation(fields: [userId], references: [userId], onDelete: Cascade)

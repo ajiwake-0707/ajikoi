@@ -124,7 +124,18 @@ const LOCAL_HOME_DEV_USER_ID_KEY = "ajikoi-home-dev-user-id";
 
 function isLocalHost() {
   if (typeof window === "undefined") return false;
-  return window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+  const hostname = window.location.hostname;
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    /^192\.168\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
+    /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
+    /^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
+    /^100\.6[4-9]\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
+    /^100\.[7-9]\d\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
+    /^100\.1[01]\d\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
+    /^100\.12[0-7]\.\d{1,3}\.\d{1,3}$/.test(hostname)
+  );
 }
 
 function todayAsYmd() {

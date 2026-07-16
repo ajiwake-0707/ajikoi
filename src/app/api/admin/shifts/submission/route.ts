@@ -11,6 +11,7 @@ const availabilitySchema = z.object({
   status: z.enum(["UNSET", "AVAILABLE", "UNAVAILABLE"]),
   startTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
   endTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
+  isFree: z.boolean().optional(),
 });
 
 const deleteAvailabilitySchema = z.object({
@@ -27,6 +28,10 @@ const releaseSubmissionSchema = z.object({
 function getDaysInMonth(month: string) {
   const [year, monthIndex] = month.split("-").map(Number);
   return new Date(year, monthIndex, 0).getDate();
+}
+
+function isQuarterHourTime(time: string) {
+  return /^([01]\d|2[0-3]):(00|15|30|45)$/.test(time);
 }
 
 export async function PATCH(request: Request) {
@@ -48,20 +53,30 @@ export async function PATCH(request: Request) {
     }
 
     const { userId, month, day, status } = parsed.data;
-    const startTime = status === "AVAILABLE" ? (parsed.data.startTime ?? null) : null;
-    const endTime = status === "AVAILABLE" ? (parsed.data.endTime ?? null) : null;
+    const isFree = status === "AVAILABLE" ? (parsed.data.isFree ?? false) : false;
+    const startTime = status === "AVAILABLE" && !isFree ? (parsed.data.startTime ?? null) : null;
+    const endTime = status === "AVAILABLE" && !isFree ? (parsed.data.endTime ?? null) : null;
 
     if (day > getDaysInMonth(month)) {
       return NextResponse.json({ ok: false, message: `${day}日は対象月に存在しません。` }, { status: 400 });
     }
-    if (status === "AVAILABLE" && (!startTime || !endTime)) {
+    if (!isFree && status === "AVAILABLE" && (!startTime || !endTime)) {
       return NextResponse.json({ ok: false, message: "出勤可能時間を入力してください。" }, { status: 400 });
     }
-    if (status === "AVAILABLE" && startTime && endTime && startTime >= endTime) {
+    if (!isFree && status === "AVAILABLE" && ((startTime && !endTime) || (!startTime && endTime))) {
+      return NextResponse.json(
+        { ok: false, message: "開始時刻と終了時刻を両方入力するか、両方空にしてください。" },
+        { status: 400 },
+      );
+    }
+    if (!isFree && status === "AVAILABLE" && startTime && endTime && startTime >= endTime) {
       return NextResponse.json(
         { ok: false, message: "終了時刻は開始時刻より後にしてください。" },
         { status: 400 },
       );
+    }
+    if (!isFree && status === "AVAILABLE" && startTime && endTime && (!isQuarterHourTime(startTime) || !isQuarterHourTime(endTime))) {
+      return NextResponse.json({ ok: false, message: "時刻は15分刻みで入力してください。" }, { status: 400 });
     }
 
     const permission = await prisma.staffStoreOperationPermission.findUnique({
@@ -121,12 +136,14 @@ export async function PATCH(request: Request) {
         status,
         startTime,
         endTime,
+        isFree,
         memo: null,
       },
       update: {
         status,
         startTime,
         endTime,
+        isFree,
         memo: null,
       },
     });

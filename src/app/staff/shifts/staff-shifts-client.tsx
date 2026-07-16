@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { rpcClient } from "@/orpc/client";
 
@@ -17,13 +17,15 @@ type ShiftEntry = {
   status: ShiftStatus;
   startTime: string;
   endTime: string;
+  isFree: boolean;
   memo: string;
 };
 
 type ConfirmedAssignment = {
   day: number;
-  startTime: string;
-  endTime: string;
+  startTime: string | null;
+  endTime: string | null;
+  isFree: boolean;
   memo: string | null;
 };
 
@@ -36,6 +38,11 @@ const statusLabels: Record<ShiftStatus, string> = {
   UNAVAILABLE: "休み希望",
 };
 const weekdayLabels = ["日", "月", "火", "水", "木", "金", "土"];
+const timeOptions = Array.from({ length: 96 }, (_, index) => {
+  const hour = String(Math.floor(index / 4)).padStart(2, "0");
+  const minute = String((index % 4) * 15).padStart(2, "0");
+  return `${hour}:${minute}`;
+});
 
 function formatMonth(date: Date) {
   const year = date.getFullYear();
@@ -72,12 +79,27 @@ function getMonthStartWeekday(month: string) {
   return new Date(Number(matched[1]), Number(matched[2]) - 1, 1).getDay();
 }
 
+function getAvailableTimeLabel(entry: Pick<ShiftEntry, "startTime" | "endTime" | "isFree">) {
+  if (entry.isFree) return "フリー";
+  return `${entry.startTime || "--:--"}-${entry.endTime || "--:--"}`;
+}
+
+function getConfirmedTimeLabel(assignment: Pick<ConfirmedAssignment, "startTime" | "endTime" | "isFree">) {
+  if (assignment.isFree) return "フリー";
+  return `${assignment.startTime || "--:--"}-${assignment.endTime || "--:--"}`;
+}
+
+function getEndTimeOptions(startTime: string) {
+  return startTime ? timeOptions.filter((time) => time > startTime) : timeOptions;
+}
+
 function buildEmptyEntries(month: string): ShiftEntry[] {
   return Array.from({ length: getDaysInMonth(month) }, (_, index) => ({
     day: index + 1,
     status: "UNSET",
     startTime: "",
     endTime: "",
+    isFree: false,
     memo: "",
   }));
 }
@@ -87,6 +109,7 @@ function mergeEntries(month: string, savedEntries: Array<{
   status: ShiftStatus;
   startTime: string | null;
   endTime: string | null;
+  isFree: boolean;
   memo: string | null;
 }>) {
   const byDay = new Map(savedEntries.map((entry) => [entry.day, entry]));
@@ -98,6 +121,7 @@ function mergeEntries(month: string, savedEntries: Array<{
       status: saved.status,
       startTime: saved.startTime ?? "",
       endTime: saved.endTime ?? "",
+      isFree: saved.isFree,
       memo: saved.memo ?? "",
     };
   });
@@ -105,7 +129,18 @@ function mergeEntries(month: string, savedEntries: Array<{
 
 function isLocalHost() {
   if (typeof window === "undefined") return false;
-  return window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+  const hostname = window.location.hostname;
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    /^192\.168\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
+    /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
+    /^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
+    /^100\.6[4-9]\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
+    /^100\.[7-9]\d\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
+    /^100\.1[01]\d\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
+    /^100\.12[0-7]\.\d{1,3}\.\d{1,3}$/.test(hostname)
+  );
 }
 
 export default function StaffShiftsClient() {
@@ -123,6 +158,7 @@ export default function StaffShiftsClient() {
   const [submittedAt, setSubmittedAt] = useState<string | null>(null);
   const [isLoadingShift, setIsLoadingShift] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const isSavingRef = useRef(false);
   const [message, setMessage] = useState<string | null>(null);
   const minimumShiftMonth = useMemo(() => getMinimumShiftMonth(), []);
 
@@ -134,7 +170,8 @@ export default function StaffShiftsClient() {
     () => entries.filter((entry) => entry.status === "UNAVAILABLE").length,
     [entries],
   );
-  const isConfirmed = confirmedAssignments.length > 0;
+  const isSubmitted = Boolean(submittedAt);
+  const isConfirmed = isSubmitted && confirmedAssignments.length > 0;
   const calendarCells = useMemo(() => {
     const blanks = Array.from({ length: getMonthStartWeekday(month) }, () => null);
     return [...blanks, ...entries];
@@ -152,14 +189,12 @@ export default function StaffShiftsClient() {
       grouped.set(assignment.day, rows);
     }
     for (const rows of grouped.values()) {
-      rows.sort((a, b) => a.startTime.localeCompare(b.startTime));
+      rows.sort((a, b) => (a.startTime ?? "").localeCompare(b.startTime ?? ""));
     }
     return grouped;
   }, [confirmedAssignments]);
   const selectedEntry = entries.find((entry) => entry.day === selectedDay) ?? entries[0] ?? null;
   const selectedConfirmedAssignments = confirmedAssignmentsByDay.get(selectedDay) ?? [];
-  const isSubmitted = Boolean(submittedAt);
-
   const loadShift = useCallback(async (user: StaffUser, targetMonth: string) => {
     setIsLoadingShift(true);
     setMessage(null);
@@ -300,7 +335,47 @@ export default function StaffShiftsClient() {
           ? {
               ...entry,
               ...patch,
-              ...(patch.status && patch.status !== "AVAILABLE" ? { startTime: "", endTime: "" } : {}),
+              ...(patch.status ? { startTime: "", endTime: "", isFree: false } : {}),
+            }
+          : entry,
+      ),
+    );
+  };
+
+  const updateStartTime = (day: number, startTime: string) => {
+    if (isSubmitted || isConfirmed) return;
+    setEntries((prev) =>
+      prev.map((entry) => {
+        if (entry.day !== day) return entry;
+        if (!startTime) return { ...entry, startTime: "", endTime: "", isFree: false };
+        const endOptions = getEndTimeOptions(startTime);
+        return {
+          ...entry,
+          startTime,
+          endTime: entry.endTime && entry.endTime > startTime ? entry.endTime : (endOptions[0] ?? ""),
+          isFree: false,
+        };
+      }),
+    );
+  };
+
+  const updateEndTime = (day: number, endTime: string) => {
+    if (isSubmitted || isConfirmed) return;
+    setEntries((prev) =>
+      prev.map((entry) => (entry.day === day ? { ...entry, endTime, isFree: false } : entry)),
+    );
+  };
+
+  const toggleFreeAvailability = (day: number) => {
+    if (isSubmitted || isConfirmed) return;
+    setEntries((prev) =>
+      prev.map((entry) =>
+        entry.day === day
+          ? {
+              ...entry,
+              startTime: "",
+              endTime: "",
+              isFree: !entry.isFree,
             }
           : entry,
       ),
@@ -341,7 +416,8 @@ export default function StaffShiftsClient() {
   };
 
   const handleSave = async () => {
-    if (!staffUser || isSaving || isSubmitted || isConfirmed) return;
+    if (!staffUser || isSavingRef.current || isSaving || isSubmitted || isConfirmed) return;
+    isSavingRef.current = true;
     setIsSaving(true);
     setMessage(null);
     try {
@@ -353,6 +429,7 @@ export default function StaffShiftsClient() {
           status: entry.status,
           startTime: entry.startTime || null,
           endTime: entry.endTime || null,
+          isFree: entry.status === "AVAILABLE" && entry.isFree,
           memo: null,
         })),
       });
@@ -362,6 +439,7 @@ export default function StaffShiftsClient() {
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "希望シフトの保存に失敗しました。");
     } finally {
+      isSavingRef.current = false;
       setIsSaving(false);
     }
   };
@@ -486,15 +564,15 @@ export default function StaffShiftsClient() {
         </div>
       </header>
 
-      <section className="mt-4 rounded-2xl bg-white p-4 shadow-sm">
-        <label className="block min-w-0">
+      <section className="mt-4 overflow-hidden rounded-2xl bg-white p-4 shadow-sm">
+        <label className="block min-w-0 overflow-hidden">
           <span className="mb-1 block text-sm font-semibold text-[#334155]">対象月</span>
           <input
             type="month"
             value={month}
             min={minimumShiftMonth}
             onChange={(event) => handleMonthChange(event.target.value)}
-            className="min-w-0 w-full rounded-lg border border-[#cbd5e1] px-3 py-3 text-base font-semibold outline-none focus:border-[#0f766e]"
+            className="block h-12 w-full min-w-0 max-w-full appearance-none rounded-lg border border-[#cbd5e1] px-2 py-0 text-center text-sm font-semibold leading-[48px] outline-none focus:border-[#0f766e]"
           />
         </label>
         {!isConfirmed ? (
@@ -522,11 +600,11 @@ export default function StaffShiftsClient() {
             <div className="mt-3 space-y-2">
               {selectedConfirmedAssignments.map((assignment) => (
                 <div
-                  key={`${assignment.startTime}:${assignment.endTime}`}
+                  key={`${assignment.isFree ? "free" : `${assignment.startTime}:${assignment.endTime}`}`}
                   className="rounded-xl bg-[#ecfdf5] px-4 py-3"
                 >
                   <p className="text-sm font-bold text-[#0f766e]">
-                    {assignment.startTime}-{assignment.endTime}
+                    {getConfirmedTimeLabel(assignment)}
                   </p>
                 </div>
               ))}
@@ -547,7 +625,7 @@ export default function StaffShiftsClient() {
             }`}
           >
             {selectedEntry.status === "AVAILABLE"
-              ? `出勤可 ${selectedEntry.startTime || "--:--"}-${selectedEntry.endTime || "--:--"}`
+              ? `出勤可 ${getAvailableTimeLabel(selectedEntry)}`
               : statusLabels[selectedEntry.status]}
           </div>
         ) : null}
@@ -611,10 +689,10 @@ export default function StaffShiftsClient() {
                         <span className="mt-1 block space-y-0.5 text-[10px] font-semibold leading-4">
                           {dayAssignments.map((assignment) => (
                             <span
-                              key={`${assignment.startTime}:${assignment.endTime}`}
+                              key={`${assignment.isFree ? "free" : `${assignment.startTime}:${assignment.endTime}`}`}
                               className="block truncate"
                             >
-                              {assignment.startTime}-{assignment.endTime}
+                              {getConfirmedTimeLabel(assignment)}
                             </span>
                           ))}
                         </span>
@@ -639,9 +717,7 @@ export default function StaffShiftsClient() {
                       >
                         <span className="block text-sm font-bold">{entry.day}</span>
                         <span className="mt-1 block truncate text-[10px] font-semibold">
-                          {entry.status === "AVAILABLE"
-                            ? `${entry.startTime || "--:--"}-${entry.endTime || "--:--"}`
-                            : statusLabels[entry.status]}
+                          {entry.status === "AVAILABLE" ? getAvailableTimeLabel(entry) : statusLabels[entry.status]}
                         </span>
                       </button>
                     ) : (
@@ -713,27 +789,57 @@ export default function StaffShiftsClient() {
             </label>
 
             {selectedEntry.status === "AVAILABLE" ? (
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                <label className="block min-w-0">
-                  <span className="mb-1 block text-xs font-semibold text-[#64748b]">開始</span>
-                  <input
-                    type="time"
-                    value={selectedEntry.startTime}
-                    onChange={(event) => updateEntry(selectedEntry.day, { startTime: event.target.value })}
-                    disabled={isSubmitted}
-                    className="min-w-0 w-full rounded-lg border border-[#cbd5e1] px-3 py-3 text-base font-semibold outline-none focus:border-[#0f766e]"
-                  />
-                </label>
-                <label className="block min-w-0">
-                  <span className="mb-1 block text-xs font-semibold text-[#64748b]">終了</span>
-                  <input
-                    type="time"
-                    value={selectedEntry.endTime}
-                    onChange={(event) => updateEntry(selectedEntry.day, { endTime: event.target.value })}
-                    disabled={isSubmitted}
-                    className="min-w-0 w-full rounded-lg border border-[#cbd5e1] px-3 py-3 text-base font-semibold outline-none focus:border-[#0f766e]"
-                  />
-                </label>
+              <div className="mt-3 space-y-3">
+                <button
+                  type="button"
+                  onClick={() => toggleFreeAvailability(selectedEntry.day)}
+                  disabled={isSubmitted}
+                  className={`w-full rounded-xl border px-4 py-3 text-left text-sm font-bold transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                    selectedEntry.isFree
+                      ? "border-[#0f766e] bg-[#ecfdf5] text-[#0f766e]"
+                      : "border-[#cbd5e1] bg-white text-[#334155]"
+                  }`}
+                >
+                  フリー
+                  <span className="mt-1 block text-xs font-semibold text-[#64748b]">
+                    時間指定なし。何時でも入れます。
+                  </span>
+                </button>
+
+                <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-2">
+                  <label className="block min-w-0 overflow-hidden">
+                    <span className="mb-1 block text-xs font-semibold text-[#64748b]">開始</span>
+                    <select
+                      value={selectedEntry.startTime}
+                      onChange={(event) => updateStartTime(selectedEntry.day, event.target.value)}
+                      disabled={isSubmitted || selectedEntry.isFree}
+                      className="block h-12 w-full min-w-0 max-w-full appearance-none rounded-lg border border-[#cbd5e1] bg-white px-2 py-0 text-center text-sm font-semibold leading-[48px] outline-none focus:border-[#0f766e] disabled:bg-[#f8fafc] disabled:text-[#94a3b8]"
+                    >
+                      <option value="">指定なし</option>
+                      {timeOptions.map((time) => (
+                        <option key={time} value={time}>
+                          {time}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="block min-w-0 overflow-hidden">
+                    <span className="mb-1 block text-xs font-semibold text-[#64748b]">終了</span>
+                    <select
+                      value={selectedEntry.endTime}
+                      onChange={(event) => updateEndTime(selectedEntry.day, event.target.value)}
+                      disabled={isSubmitted || selectedEntry.isFree || !selectedEntry.startTime}
+                      className="block h-12 w-full min-w-0 max-w-full appearance-none rounded-lg border border-[#cbd5e1] bg-white px-2 py-0 text-center text-sm font-semibold leading-[48px] outline-none focus:border-[#0f766e] disabled:bg-[#f8fafc] disabled:text-[#94a3b8]"
+                    >
+                      {!selectedEntry.startTime ? <option value="">指定なし</option> : null}
+                      {getEndTimeOptions(selectedEntry.startTime).map((time) => (
+                        <option key={time} value={time}>
+                          {time}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
               </div>
             ) : null}
 

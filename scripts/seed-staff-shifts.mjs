@@ -90,18 +90,32 @@ function buildEntries(month, staffIndex) {
         status: "UNAVAILABLE",
         startTime: null,
         endTime: null,
+        isFree: false,
         memo: null,
       });
       continue;
     }
 
     if (availableRoll <= 42 + weekendBias) {
+      if (availableRoll <= 8) {
+        entries.push({
+          day,
+          status: "AVAILABLE",
+          startTime: null,
+          endTime: null,
+          isFree: true,
+          memo: null,
+        });
+        continue;
+      }
+
       const { startTime, endTime } = randomTimeRange();
       entries.push({
         day,
         status: "AVAILABLE",
         startTime,
         endTime,
+        isFree: false,
         memo: null,
       });
       continue;
@@ -112,6 +126,7 @@ function buildEntries(month, staffIndex) {
       status: "UNSET",
       startTime: null,
       endTime: null,
+      isFree: false,
       memo: null,
     });
   }

@@ -82,6 +82,7 @@ export default async function AdminShiftsPage({ searchParams }: Props) {
           status: true,
           startTime: true,
           endTime: true,
+          isFree: true,
           memo: true,
         },
       },
@@ -107,6 +108,7 @@ export default async function AdminShiftsPage({ searchParams }: Props) {
               day: true,
               startTime: true,
               endTime: true,
+              isFree: true,
               memo: true,
             },
           },
@@ -128,6 +130,7 @@ export default async function AdminShiftsPage({ searchParams }: Props) {
             status: entry.status as ShiftStatus,
             startTime: entry.startTime,
             endTime: entry.endTime,
+            isFree: entry.isFree,
             memo: entry.memo,
           })),
         };
@@ -138,6 +141,7 @@ export default async function AdminShiftsPage({ searchParams }: Props) {
         day: assignment.day,
         startTime: assignment.startTime,
         endTime: assignment.endTime,
+        isFree: assignment.isFree,
         memo: assignment.memo,
       }))}
     />

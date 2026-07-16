@@ -10,6 +10,7 @@ type ShiftEntry = {
   status: ShiftStatus;
   startTime: string | null;
   endTime: string | null;
+  isFree: boolean;
   memo: string | null;
 };
 
@@ -27,8 +28,9 @@ type ShiftAssignment = {
   id: string;
   userId: string;
   day: number;
-  startTime: string;
-  endTime: string;
+  startTime: string | null;
+  endTime: string | null;
+  isFree: boolean;
   memo: string | null;
 };
 
@@ -45,6 +47,7 @@ type EditingAvailability = {
   status: ShiftStatus;
   startTime: string;
   endTime: string;
+  isFree: boolean;
 };
 
 type Props = {
@@ -54,6 +57,11 @@ type Props = {
 };
 
 const weekdayLabels = ["日", "月", "火", "水", "木", "金", "土"];
+const timeOptions = Array.from({ length: 96 }, (_, index) => {
+  const hour = String(Math.floor(index / 4)).padStart(2, "0");
+  const minute = String((index % 4) * 15).padStart(2, "0");
+  return `${hour}:${minute}`;
+});
 
 function getDaysInMonth(month: string) {
   const matched = month.match(/^(\d{4})-(\d{2})$/);
@@ -71,7 +79,17 @@ function getWeekdayLabel(month: string, day: number) {
 function resolveEntryLabel(entry: ShiftEntry | undefined) {
   if (!entry || entry.status === "UNSET") return "未定";
   if (entry.status === "UNAVAILABLE") return "休";
+  if (entry.isFree) return "フリー";
   return `${entry.startTime ?? "--:--"}-${entry.endTime ?? "--:--"}`;
+}
+
+function resolveAssignmentLabel(assignment: ShiftAssignment) {
+  if (assignment.isFree) return "フリー";
+  return `${assignment.startTime ?? "--:--"}-${assignment.endTime ?? "--:--"}`;
+}
+
+function getEndTimeOptions(startTime: string) {
+  return startTime ? timeOptions.filter((time) => time > startTime) : timeOptions;
 }
 
 function resolveEntryClassName(entry: ShiftEntry | undefined) {
@@ -80,11 +98,38 @@ function resolveEntryClassName(entry: ShiftEntry | undefined) {
   return "bg-[#ecfdf5] text-[#0f766e]";
 }
 
+function resolveDailyListCellLabel(
+  entry: ShiftEntry | undefined,
+  confirmedRows: ShiftAssignment[],
+  showConfirmedSchedule: boolean,
+) {
+  if (!showConfirmedSchedule) return resolveEntryLabel(entry);
+  if (confirmedRows.length === 0) return "未定";
+  return confirmedRows.map((assignment) => resolveAssignmentLabel(assignment)).join(" / ");
+}
+
+function resolveDailyListCellClassName(
+  entry: ShiftEntry | undefined,
+  confirmedRows: ShiftAssignment[],
+  showConfirmedSchedule: boolean,
+) {
+  if (!showConfirmedSchedule) return resolveEntryClassName(entry);
+  if (confirmedRows.length === 0) return "bg-[#f8fafc] text-[#64748b]";
+  return "bg-[#ecfdf5] text-[#0f766e]";
+}
+
 function isSameAssignment(a: ShiftAssignment, b: ShiftAssignment) {
-  return a.userId === b.userId && a.day === b.day && a.startTime === b.startTime && a.endTime === b.endTime;
+  return (
+    a.userId === b.userId &&
+    a.day === b.day &&
+    a.startTime === b.startTime &&
+    a.endTime === b.endTime &&
+    a.isFree === b.isFree
+  );
 }
 
 function overlaps(a: ShiftAssignment, b: ShiftAssignment) {
+  if (a.isFree || b.isFree || !a.startTime || !a.endTime || !b.startTime || !b.endTime) return false;
   return a.day === b.day && a.startTime < b.endTime && b.startTime < a.endTime;
 }
 
@@ -94,13 +139,17 @@ function buildConflictGroups(candidates: ShiftAssignment[]) {
   const byDay = new Map<number, ShiftAssignment[]>();
 
   for (const candidate of candidates) {
+    if (candidate.isFree || !candidate.startTime || !candidate.endTime) {
+      nonConflicting.push(candidate);
+      continue;
+    }
     const rows = byDay.get(candidate.day) ?? [];
     rows.push(candidate);
     byDay.set(candidate.day, rows);
   }
 
   for (const [day, rows] of byDay.entries()) {
-    const sorted = rows.slice().sort((a, b) => a.startTime.localeCompare(b.startTime));
+    const sorted = rows.slice().sort((a, b) => (a.startTime ?? "").localeCompare(b.startTime ?? ""));
     let currentGroup: ShiftAssignment[] = [];
     let currentMaxEnd = "";
 
@@ -120,18 +169,18 @@ function buildConflictGroups(candidates: ShiftAssignment[]) {
     for (const row of sorted) {
       if (currentGroup.length === 0) {
         currentGroup = [row];
-        currentMaxEnd = row.endTime;
+        currentMaxEnd = row.endTime ?? "";
         continue;
       }
 
       const hasOverlap = currentGroup.some((item) => overlaps(item, row));
-      if (hasOverlap || row.startTime < currentMaxEnd) {
+      if (hasOverlap || (row.startTime ?? "") < currentMaxEnd) {
         currentGroup.push(row);
-        currentMaxEnd = row.endTime > currentMaxEnd ? row.endTime : currentMaxEnd;
+        currentMaxEnd = (row.endTime ?? "") > currentMaxEnd ? (row.endTime ?? "") : currentMaxEnd;
       } else {
         flush();
         currentGroup = [row];
-        currentMaxEnd = row.endTime;
+        currentMaxEnd = row.endTime ?? "";
       }
     }
     flush();
@@ -147,6 +196,7 @@ export default function AdminShiftsClient({ month, staff, initialAssignments }: 
   const [assignmentUserId, setAssignmentUserId] = useState(staff[0]?.userId ?? "");
   const [assignmentStartTime, setAssignmentStartTime] = useState("18:00");
   const [assignmentEndTime, setAssignmentEndTime] = useState("23:00");
+  const [assignmentIsFree, setAssignmentIsFree] = useState(false);
   const [isSavingSchedule, setIsSavingSchedule] = useState(false);
   const [scheduleMessage, setScheduleMessage] = useState<string | null>(null);
   const [autoReflectConflicts, setAutoReflectConflicts] = useState<AutoReflectConflict[]>([]);
@@ -159,6 +209,7 @@ export default function AdminShiftsClient({ month, staff, initialAssignments }: 
   const days = useMemo(() => Array.from({ length: getDaysInMonth(month) }, (_, index) => index + 1), [month]);
   const submittedCount = staff.filter((row) => row.submittedAt).length;
   const totalCount = staff.length;
+  const showConfirmedScheduleInDailyList = assignments.length > 0;
 
   const normalizedStaff = useMemo(
     () =>
@@ -177,7 +228,20 @@ export default function AdminShiftsClient({ month, staff, initialAssignments }: 
       grouped.set(assignment.day, rows);
     }
     for (const rows of grouped.values()) {
-      rows.sort((a, b) => a.startTime.localeCompare(b.startTime));
+      rows.sort((a, b) => (a.startTime ?? "").localeCompare(b.startTime ?? ""));
+    }
+    return grouped;
+  }, [assignments]);
+  const assignmentsByUserDay = useMemo(() => {
+    const grouped = new Map<string, ShiftAssignment[]>();
+    for (const assignment of assignments) {
+      const key = `${assignment.userId}:${assignment.day}`;
+      const rows = grouped.get(key) ?? [];
+      rows.push(assignment);
+      grouped.set(key, rows);
+    }
+    for (const rows of grouped.values()) {
+      rows.sort((a, b) => (a.startTime ?? "").localeCompare(b.startTime ?? ""));
     }
     return grouped;
   }, [assignments]);
@@ -193,13 +257,46 @@ export default function AdminShiftsClient({ month, staff, initialAssignments }: 
       displayName: row.displayName,
       day,
       status: entry?.status ?? "UNSET",
-      startTime: entry?.startTime ?? "18:00",
-      endTime: entry?.endTime ?? "23:00",
+      startTime: entry?.startTime ?? "",
+      endTime: entry?.endTime ?? "",
+      isFree: entry?.isFree ?? false,
     });
   };
 
   const updateEditingAvailability = (patch: Partial<EditingAvailability>) => {
-    setEditingAvailability((prev) => (prev ? { ...prev, ...patch } : prev));
+    setEditingAvailability((prev) =>
+      prev
+        ? {
+            ...prev,
+            ...patch,
+            ...(patch.status ? { startTime: "", endTime: "", isFree: false } : {}),
+          }
+        : prev,
+    );
+  };
+
+  const updateEditingStartTime = (startTime: string) => {
+    setEditingAvailability((prev) => {
+      if (!prev) return prev;
+      if (!startTime) return { ...prev, startTime: "", endTime: "", isFree: true };
+      const endOptions = getEndTimeOptions(startTime);
+      return {
+        ...prev,
+        startTime,
+        endTime: prev.endTime && prev.endTime > startTime ? prev.endTime : (endOptions[0] ?? ""),
+        isFree: false,
+      };
+    });
+  };
+
+  const updateEditingEndTime = (endTime: string) => {
+    setEditingAvailability((prev) => (prev ? { ...prev, endTime, isFree: false } : prev));
+  };
+
+  const setEditingFreeAvailability = () => {
+    setEditingAvailability((prev) =>
+      prev ? { ...prev, status: "AVAILABLE", startTime: "", endTime: "", isFree: true } : prev,
+    );
   };
 
   const handleSaveAvailability = async () => {
@@ -215,8 +312,15 @@ export default function AdminShiftsClient({ month, staff, initialAssignments }: 
           month,
           day: editingAvailability.day,
           status: editingAvailability.status,
-          startTime: editingAvailability.status === "AVAILABLE" ? editingAvailability.startTime : null,
-          endTime: editingAvailability.status === "AVAILABLE" ? editingAvailability.endTime : null,
+          startTime:
+            editingAvailability.status === "AVAILABLE" && !editingAvailability.isFree
+              ? editingAvailability.startTime || null
+              : null,
+          endTime:
+            editingAvailability.status === "AVAILABLE" && !editingAvailability.isFree
+              ? editingAvailability.endTime || null
+              : null,
+          isFree: editingAvailability.status === "AVAILABLE" && editingAvailability.isFree,
         }),
       });
       const json = (await response.json()) as { ok?: boolean; message?: string };
@@ -294,7 +398,7 @@ export default function AdminShiftsClient({ month, staff, initialAssignments }: 
       setScheduleMessage("スタッフを選択してください。");
       return;
     }
-    if (assignmentStartTime >= assignmentEndTime) {
+    if (!assignmentIsFree && assignmentStartTime >= assignmentEndTime) {
       setScheduleMessage("終了時刻は開始時刻より後にしてください。");
       return;
     }
@@ -304,8 +408,9 @@ export default function AdminShiftsClient({ month, staff, initialAssignments }: 
         id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         userId: assignmentUserId,
         day: assignmentDay,
-        startTime: assignmentStartTime,
-        endTime: assignmentEndTime,
+        startTime: assignmentIsFree ? null : assignmentStartTime,
+        endTime: assignmentIsFree ? null : assignmentEndTime,
+        isFree: assignmentIsFree,
         memo: null,
       },
     ]);
@@ -330,17 +435,38 @@ export default function AdminShiftsClient({ month, staff, initialAssignments }: 
 
   const handleAutoReflect = () => {
     setScheduleMessage(null);
-    const candidates = normalizedStaff.flatMap((row) =>
-      row.entries
-        .filter((entry) => entry.status === "AVAILABLE" && entry.startTime && entry.endTime)
-        .map((entry) => ({
-          id: `auto-${row.userId}-${entry.day}-${entry.startTime}-${entry.endTime}`,
-          userId: row.userId,
-          day: entry.day,
-          startTime: entry.startTime ?? "",
-          endTime: entry.endTime ?? "",
-          memo: null,
-        })),
+    const candidates: ShiftAssignment[] = normalizedStaff.flatMap((row) =>
+      row.entries.flatMap<ShiftAssignment>((entry) => {
+        if (entry.status !== "AVAILABLE") return [];
+        if (entry.isFree) {
+          return [
+            {
+              id: `auto-free-${row.userId}-${entry.day}`,
+              userId: row.userId,
+              day: entry.day,
+              startTime: null,
+              endTime: null,
+              isFree: true,
+              memo: null,
+            },
+          ];
+        }
+        if (entry.startTime && entry.endTime) {
+          if (!timeOptions.includes(entry.startTime) || !timeOptions.includes(entry.endTime)) return [];
+          return [
+            {
+              id: `auto-${row.userId}-${entry.day}-${entry.startTime}-${entry.endTime}`,
+              userId: row.userId,
+              day: entry.day,
+              startTime: entry.startTime,
+              endTime: entry.endTime,
+              isFree: false,
+              memo: null,
+            },
+          ];
+        }
+        return [];
+      }),
     );
     const newCandidates = candidates.filter(
       (candidate) => !assignments.some((assignment) => isSameAssignment(assignment, candidate)),
@@ -417,8 +543,9 @@ export default function AdminShiftsClient({ month, staff, initialAssignments }: 
           assignments: assignments.map((assignment) => ({
             userId: assignment.userId,
             day: assignment.day,
-            startTime: assignment.startTime,
-            endTime: assignment.endTime,
+            startTime: assignment.isFree ? null : assignment.startTime,
+            endTime: assignment.isFree ? null : assignment.endTime,
+            isFree: assignment.isFree,
             memo: null,
           })),
         }),
@@ -446,14 +573,14 @@ export default function AdminShiftsClient({ month, staff, initialAssignments }: 
         </p>
       </header>
 
-      <section className="rounded-2xl bg-white p-4 shadow-sm">
-        <label className="block">
+      <section className="overflow-hidden rounded-2xl bg-white p-4 shadow-sm">
+        <label className="block min-w-0 overflow-hidden">
           <span className="mb-1 block text-sm font-semibold text-[#334155]">対象月</span>
           <input
             type="month"
             value={month}
             onChange={(event) => handleMonthChange(event.target.value)}
-            className="w-full rounded-lg border border-[#cbd5e1] px-3 py-3 text-base font-semibold outline-none focus:border-[#0f766e] sm:w-64"
+            className="block h-12 w-full min-w-0 max-w-full appearance-none rounded-lg border border-[#cbd5e1] px-2 py-0 text-center text-sm font-semibold leading-[48px] outline-none focus:border-[#0f766e] sm:w-64"
           />
         </label>
         <div className="mt-3 grid grid-cols-2 gap-2 text-center text-sm sm:max-w-sm">
@@ -486,7 +613,7 @@ export default function AdminShiftsClient({ month, staff, initialAssignments }: 
             <table className="min-w-max border-separate border-spacing-1 text-sm">
               <thead>
                 <tr>
-                  <th className="sticky left-0 z-10 min-w-36 rounded-lg bg-[#f8fafc] px-3 py-2 text-left text-xs text-[#64748b]">
+                  <th className="sticky left-0 z-10 w-36 min-w-36 rounded-lg bg-[#f8fafc] px-3 py-2 text-left text-xs text-[#64748b]">
                     スタッフ
                   </th>
                   {days.map((day) => (
@@ -500,37 +627,40 @@ export default function AdminShiftsClient({ month, staff, initialAssignments }: 
               <tbody>
                 {normalizedStaff.map((row) => (
                   <tr key={`${row.userId}:${row.officialAccountId}`}>
-                    <th className="sticky left-0 z-10 rounded-lg bg-white px-3 py-2 text-left align-top shadow-sm">
-                      <span className="block font-bold text-[#0f172a]">{row.displayName}</span>
-                      <span
-                        className={`mt-1 inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${
-                          row.submittedAt ? "bg-[#ecfdf5] text-[#0f766e]" : "bg-[#fff1f2] text-[#be123c]"
-                        }`}
-                      >
-                        {row.submittedAt ? "提出済み" : "未提出"}
-                      </span>
-                      {row.submittedAt ? (
-                        <button
-                          type="button"
-                          onClick={() => void handleReleaseSubmission(row)}
-                          disabled={releasingSubmissionKey === `${row.userId}:${row.officialAccountId}`}
-                          className="mt-2 block rounded border border-[#cbd5e1] px-2 py-1 text-xs font-bold text-[#334155] disabled:cursor-not-allowed disabled:opacity-60"
+                    <th className="sticky left-0 z-10 w-36 min-w-36 rounded-lg bg-white px-3 py-2 text-left align-top shadow-sm">
+                      <span className="block truncate font-bold text-[#0f172a]">{row.displayName}</span>
+                      <span className="mt-1 flex items-center gap-1">
+                        <span
+                          className={`inline-flex h-6 items-center rounded-full px-2 text-[10px] font-semibold leading-none ${
+                            row.submittedAt ? "bg-[#ecfdf5] text-[#0f766e]" : "bg-[#fff1f2] text-[#be123c]"
+                          }`}
                         >
-                          {releasingSubmissionKey === `${row.userId}:${row.officialAccountId}` ? "解除中..." : "提出解除"}
-                        </button>
-                      ) : null}
+                          {row.submittedAt ? "提出済み" : "未提出"}
+                        </span>
+                        {row.submittedAt ? (
+                          <button
+                            type="button"
+                            onClick={() => void handleReleaseSubmission(row)}
+                            disabled={releasingSubmissionKey === `${row.userId}:${row.officialAccountId}`}
+                            className="inline-flex h-6 shrink-0 items-center rounded-full border border-[#cbd5e1] px-2 text-[10px] font-bold leading-none text-[#334155] disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {releasingSubmissionKey === `${row.userId}:${row.officialAccountId}` ? "解除中" : "解除"}
+                          </button>
+                        ) : null}
+                      </span>
                     </th>
                     {days.map((day) => {
                       const entry = row.entryByDay.get(day);
+                      const confirmedRows = assignmentsByUserDay.get(`${row.userId}:${day}`) ?? [];
                       return (
                         <td key={day} className="align-top">
                           <button
                             type="button"
                             onClick={() => handleOpenAvailabilityEdit(row, day, entry)}
-                            className={`min-h-12 w-full rounded-lg px-2 py-2 text-center text-xs font-semibold transition hover:ring-2 hover:ring-[#0f766e] hover:ring-offset-1 ${resolveEntryClassName(entry)}`}
+                            className={`min-h-12 w-full rounded-lg px-2 py-2 text-center text-xs font-semibold transition hover:ring-2 hover:ring-[#0f766e] hover:ring-offset-1 ${resolveDailyListCellClassName(entry, confirmedRows, showConfirmedScheduleInDailyList)}`}
                             title={`${row.displayName} ${day}日を修正`}
                           >
-                            {resolveEntryLabel(entry)}
+                            {resolveDailyListCellLabel(entry, confirmedRows, showConfirmedScheduleInDailyList)}
                           </button>
                         </td>
                       );
@@ -549,6 +679,8 @@ export default function AdminShiftsClient({ month, staff, initialAssignments }: 
             <h2 className="text-lg font-bold">確定シフト作成</h2>
             <p className="mt-1 text-sm text-[#64748b]">
               希望を見ながら、実際に入るスタッフと時間を追加してください。
+              <br/>
+              修正が終われば必ず<span className="font-bold text-[#be123c]">「確定シフトを保存」</span>を押してください。
             </p>
           </div>
           <button
@@ -568,7 +700,7 @@ export default function AdminShiftsClient({ month, staff, initialAssignments }: 
           希望シフトを自動反映
         </button>
 
-        <div className="mt-4 grid gap-3 md:grid-cols-[120px_1fr_120px_120px_auto]">
+        <div className="mt-4 grid gap-3 md:grid-cols-[110px_1fr_90px_120px_120px_auto]">
           <label className="block">
             <span className="mb-1 block text-xs font-semibold text-[#64748b]">日付</span>
             <select
@@ -597,13 +729,25 @@ export default function AdminShiftsClient({ month, staff, initialAssignments }: 
               ))}
             </select>
           </label>
+          <button
+            type="button"
+            onClick={() => setAssignmentIsFree((prev) => !prev)}
+            className={`self-end rounded-lg border px-4 py-2 text-sm font-bold transition ${
+              assignmentIsFree
+                ? "border-[#0f766e] bg-[#ecfdf5] text-[#0f766e]"
+                : "border-[#cbd5e1] bg-white text-[#334155]"
+            }`}
+          >
+            フリー
+          </button>
           <label className="block">
             <span className="mb-1 block text-xs font-semibold text-[#64748b]">開始</span>
             <input
               type="time"
               value={assignmentStartTime}
               onChange={(event) => setAssignmentStartTime(event.target.value)}
-              className="w-full rounded-lg border border-[#cbd5e1] px-3 py-2 text-sm font-semibold outline-none focus:border-[#0f766e]"
+              disabled={assignmentIsFree}
+              className="w-full rounded-lg border border-[#cbd5e1] px-3 py-2 text-sm font-semibold outline-none focus:border-[#0f766e] disabled:bg-[#f8fafc] disabled:text-[#94a3b8]"
             />
           </label>
           <label className="block">
@@ -612,7 +756,8 @@ export default function AdminShiftsClient({ month, staff, initialAssignments }: 
               type="time"
               value={assignmentEndTime}
               onChange={(event) => setAssignmentEndTime(event.target.value)}
-              className="w-full rounded-lg border border-[#cbd5e1] px-3 py-2 text-sm font-semibold outline-none focus:border-[#0f766e]"
+              disabled={assignmentIsFree}
+              className="w-full rounded-lg border border-[#cbd5e1] px-3 py-2 text-sm font-semibold outline-none focus:border-[#0f766e] disabled:bg-[#f8fafc] disabled:text-[#94a3b8]"
             />
           </label>
           <button
@@ -654,7 +799,7 @@ export default function AdminShiftsClient({ month, staff, initialAssignments }: 
                                 {staffById.get(assignment.userId)?.displayName ?? assignment.userId}
                               </p>
                               <p className="mt-1 font-semibold text-[#0f766e]">
-                                {assignment.startTime}-{assignment.endTime}
+                                {resolveAssignmentLabel(assignment)}
                               </p>
                               <button
                                 type="button"
@@ -713,25 +858,55 @@ export default function AdminShiftsClient({ month, staff, initialAssignments }: 
             </label>
 
             {editingAvailability.status === "AVAILABLE" ? (
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                <label className="block min-w-0">
-                  <span className="mb-1 block text-xs font-semibold text-[#64748b]">開始</span>
-                  <input
-                    type="time"
-                    value={editingAvailability.startTime}
-                    onChange={(event) => updateEditingAvailability({ startTime: event.target.value })}
-                    className="min-w-0 w-full rounded-lg border border-[#cbd5e1] px-3 py-3 text-base font-semibold outline-none focus:border-[#0f766e]"
-                  />
-                </label>
-                <label className="block min-w-0">
-                  <span className="mb-1 block text-xs font-semibold text-[#64748b]">終了</span>
-                  <input
-                    type="time"
-                    value={editingAvailability.endTime}
-                    onChange={(event) => updateEditingAvailability({ endTime: event.target.value })}
-                    className="min-w-0 w-full rounded-lg border border-[#cbd5e1] px-3 py-3 text-base font-semibold outline-none focus:border-[#0f766e]"
-                  />
-                </label>
+              <div className="mt-3 space-y-3">
+                <button
+                  type="button"
+                  onClick={setEditingFreeAvailability}
+                  className={`w-full rounded-xl border px-4 py-3 text-left text-sm font-bold transition ${
+                    editingAvailability.isFree
+                      ? "border-[#0f766e] bg-[#ecfdf5] text-[#0f766e]"
+                      : "border-[#cbd5e1] bg-white text-[#334155]"
+                  }`}
+                >
+                  フリー
+                  <span className="mt-1 block text-xs font-semibold text-[#64748b]">
+                    時間指定なし。何時でも入れます。
+                  </span>
+                </button>
+
+                <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-2">
+                  <label className="block min-w-0 overflow-hidden">
+                    <span className="mb-1 block text-xs font-semibold text-[#64748b]">開始</span>
+                    <select
+                      value={editingAvailability.startTime}
+                      onChange={(event) => updateEditingStartTime(event.target.value)}
+                      className="block h-12 w-full min-w-0 max-w-full appearance-none rounded-lg border border-[#cbd5e1] bg-white px-2 py-0 text-center text-sm font-semibold leading-[48px] outline-none focus:border-[#0f766e]"
+                    >
+                      <option value="">指定なし</option>
+                      {timeOptions.map((time) => (
+                        <option key={time} value={time}>
+                          {time}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="block min-w-0 overflow-hidden">
+                    <span className="mb-1 block text-xs font-semibold text-[#64748b]">終了</span>
+                    <select
+                      value={editingAvailability.endTime}
+                      onChange={(event) => updateEditingEndTime(event.target.value)}
+                      disabled={!editingAvailability.startTime}
+                      className="block h-12 w-full min-w-0 max-w-full appearance-none rounded-lg border border-[#cbd5e1] bg-white px-2 py-0 text-center text-sm font-semibold leading-[48px] outline-none focus:border-[#0f766e] disabled:bg-[#f8fafc] disabled:text-[#94a3b8]"
+                    >
+                      {!editingAvailability.startTime ? <option value="">指定なし</option> : null}
+                      {getEndTimeOptions(editingAvailability.startTime).map((time) => (
+                        <option key={time} value={time}>
+                          {time}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
               </div>
             ) : null}
 
@@ -803,7 +978,7 @@ export default function AdminShiftsClient({ month, staff, initialAssignments }: 
                         {staffById.get(candidate.userId)?.displayName ?? candidate.userId}
                       </span>
                       <span className="mt-1 block text-sm font-semibold text-[#0f766e]">
-                        {candidate.startTime}-{candidate.endTime}
+                        {resolveAssignmentLabel(candidate)}
                       </span>
                     </span>
                   </span>

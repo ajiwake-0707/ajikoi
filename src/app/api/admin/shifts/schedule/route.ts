@@ -7,8 +7,9 @@ import { prisma } from "@/lib/prisma";
 const assignmentSchema = z.object({
   userId: z.string().min(1),
   day: z.number().int().min(1).max(31),
-  startTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
-  endTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+  startTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
+  endTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
+  isFree: z.boolean().optional(),
   memo: z.string().trim().max(200).nullable().optional(),
 });
 
@@ -49,7 +50,14 @@ export async function PATCH(request: Request) {
           { status: 400 },
         );
       }
-      if (assignment.startTime >= assignment.endTime) {
+      const isFree = assignment.isFree ?? false;
+      if (!isFree && (!assignment.startTime || !assignment.endTime)) {
+        return NextResponse.json(
+          { ok: false, message: `${assignment.day}日の勤務時間を入力してください。` },
+          { status: 400 },
+        );
+      }
+      if (!isFree && assignment.startTime && assignment.endTime && assignment.startTime >= assignment.endTime) {
         return NextResponse.json(
           { ok: false, message: `${assignment.day}日の終了時刻は開始時刻より後にしてください。` },
           { status: 400 },
@@ -108,8 +116,9 @@ export async function PATCH(request: Request) {
             scheduleId: schedule.id,
             userId: assignment.userId,
             day: assignment.day,
-            startTime: assignment.startTime,
-            endTime: assignment.endTime,
+            startTime: assignment.isFree ? null : (assignment.startTime ?? null),
+            endTime: assignment.isFree ? null : (assignment.endTime ?? null),
+            isFree: assignment.isFree ?? false,
             memo: assignment.memo?.trim() || null,
           })),
         });

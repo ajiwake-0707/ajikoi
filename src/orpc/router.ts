@@ -159,6 +159,10 @@ function getDaysInShiftMonth(month: string) {
   return new Date(year, monthIndex, 0).getDate();
 }
 
+function isQuarterHourTime(time: string) {
+  return /^([01]\d|2[0-3]):(00|15|30|45)$/.test(time);
+}
+
 async function resolveStaffScope(userId: string) {
   const officialAccountId = await resolveOfficialAccountId();
   const user = await prisma.user.findUnique({
@@ -1960,6 +1964,7 @@ export const appRouter = {
                   status: true,
                   startTime: true,
                   endTime: true,
+                  isFree: true,
                   memo: true,
                 },
               },
@@ -1980,6 +1985,7 @@ export const appRouter = {
                 day: true,
                 startTime: true,
                 endTime: true,
+                isFree: true,
                 memo: true,
               },
             },
@@ -1998,12 +2004,14 @@ export const appRouter = {
             status: entry.status as StaffShiftAvailabilityStatusValue,
             startTime: entry.startTime,
             endTime: entry.endTime,
+            isFree: entry.isFree,
             memo: entry.memo,
           })),
           confirmedAssignments: (schedule?.assignments ?? []).map((assignment) => ({
             day: assignment.day,
             startTime: assignment.startTime,
             endTime: assignment.endTime,
+            isFree: assignment.isFree,
             memo: assignment.memo,
           })),
         };
@@ -2019,6 +2027,7 @@ export const appRouter = {
               status: z.enum(["UNSET", "AVAILABLE", "UNAVAILABLE"]),
               startTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
               endTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
+              isFree: z.boolean().optional(),
               memo: z.string().trim().max(200).nullable().optional(),
             }),
           ),
@@ -2040,7 +2049,10 @@ export const appRouter = {
           },
         });
         if (existingSubmission?.submittedAt) {
-          throw new Error("提出済みの希望シフトは修正できません。");
+          return {
+            ok: true,
+            submittedAt: existingSubmission.submittedAt.toISOString(),
+          };
         }
 
         const daysInMonth = getDaysInShiftMonth(input.month);
@@ -2049,17 +2061,38 @@ export const appRouter = {
           .map((entry) => ({
             day: entry.day,
             status: entry.status,
-            startTime: entry.status === "AVAILABLE" ? (entry.startTime ?? null) : null,
-            endTime: entry.status === "AVAILABLE" ? (entry.endTime ?? null) : null,
+            isFree: entry.status === "AVAILABLE" ? (entry.isFree ?? false) : false,
+            startTime: entry.status === "AVAILABLE" && !entry.isFree ? (entry.startTime ?? null) : null,
+            endTime: entry.status === "AVAILABLE" && !entry.isFree ? (entry.endTime ?? null) : null,
             memo: entry.memo?.trim() || null,
           }));
 
         for (const entry of normalizedEntries) {
-          if (entry.status === "AVAILABLE" && (!entry.startTime || !entry.endTime)) {
-            throw new Error(`${entry.day}日の出勤可能時間を入力してください。`);
+          if (!entry.isFree && entry.status === "AVAILABLE" && (!entry.startTime || !entry.endTime)) {
+            throw new ORPCError("BAD_REQUEST", {
+              message: `${entry.day}日の出勤可能時間を入力してください。`,
+            });
           }
-          if (entry.status === "AVAILABLE" && entry.startTime && entry.endTime && entry.startTime >= entry.endTime) {
-            throw new Error(`${entry.day}日の終了時刻は開始時刻より後にしてください。`);
+          if (!entry.isFree && entry.status === "AVAILABLE" && ((entry.startTime && !entry.endTime) || (!entry.startTime && entry.endTime))) {
+            throw new ORPCError("BAD_REQUEST", {
+              message: `${entry.day}日の開始時刻と終了時刻を両方入力するか、両方空にしてください。`,
+            });
+          }
+          if (!entry.isFree && entry.status === "AVAILABLE" && entry.startTime && entry.endTime && entry.startTime >= entry.endTime) {
+            throw new ORPCError("BAD_REQUEST", {
+              message: `${entry.day}日の終了時刻は開始時刻より後にしてください。`,
+            });
+          }
+          if (
+            !entry.isFree &&
+            entry.status === "AVAILABLE" &&
+            entry.startTime &&
+            entry.endTime &&
+            (!isQuarterHourTime(entry.startTime) || !isQuarterHourTime(entry.endTime))
+          ) {
+            throw new ORPCError("BAD_REQUEST", {
+              message: `${entry.day}日の時刻は15分刻みで入力してください。`,
+            });
           }
         }
 
@@ -2097,6 +2130,7 @@ export const appRouter = {
                 status: entry.status,
                 startTime: entry.startTime,
                 endTime: entry.endTime,
+                isFree: entry.isFree,
                 memo: entry.memo,
               })),
             });
