@@ -9,30 +9,31 @@ datasource db {
 }
 
 model User {
-  userId                    String                          @id
-  displayName               String
-  pictureUrl                String?
-  role                      UserRole?
-  points                    Int                             @default(0)
-  visitCount                Int                             @default(0)
-  nextRank                  String                          @default("regular")
-  lastCheckInAt             DateTime?
-  officialAccountId         String?
-  officialLinkedAt          DateTime?
-  surveyId                  String?                         @unique
-  googleReviewId            String?                         @unique
-  rank                      Rank                            @relation(fields: [nextRank], references: [id])
-  officialAccount           OfficialAccount?                @relation(fields: [officialAccountId], references: [id])
-  survey                    UserSurvey?                     @relation(fields: [surveyId], references: [id])
-  googleReview              GoogleReview?                   @relation(fields: [googleReviewId], references: [id], onDelete: SetNull)
-  checkIns                  UserCheckIn[]
-  histories                 UserHistory[]
-  userGifts                 UserGift[]
-  storeOperationPermissions StaffStoreOperationPermission[]
-  staffShiftSubmissions     StaffShiftSubmission[]
-  staffShiftAssignments     StaffShiftAssignment[]
-  createdAt                 DateTime                        @default(now())
-  updatedAt                 DateTime                        @updatedAt
+  userId                     String                          @id
+  displayName                String
+  pictureUrl                 String?
+  role                       UserRole?
+  points                     Int                             @default(0)
+  visitCount                 Int                             @default(0)
+  nextRank                   String                          @default("regular")
+  lastCheckInAt              DateTime?
+  officialAccountId          String?
+  officialLinkedAt           DateTime?
+  surveyId                   String?                         @unique
+  googleReviewId             String?                         @unique
+  rank                       Rank                            @relation(fields: [nextRank], references: [id])
+  officialAccount            OfficialAccount?                @relation(fields: [officialAccountId], references: [id])
+  survey                     UserSurvey?                     @relation(fields: [surveyId], references: [id])
+  googleReview               GoogleReview?                   @relation(fields: [googleReviewId], references: [id], onDelete: SetNull)
+  checkIns                   UserCheckIn[]
+  histories                  UserHistory[]
+  userGifts                  UserGift[]
+  storeOperationPermissions  StaffStoreOperationPermission[]
+  staffShiftSubmissions      StaffShiftSubmission[]
+  staffShiftAssignments      StaffShiftAssignment[]
+  staffShiftDraftAssignments StaffShiftDraftAssignment[]
+  createdAt                  DateTime                        @default(now())
+  updatedAt                  DateTime                        @updatedAt
 
   @@index([officialAccountId, createdAt])
   @@map("users")
@@ -262,6 +263,7 @@ model OfficialAccount {
   staffOperationPermissions        StaffStoreOperationPermission[]
   staffShiftSubmissions            StaffShiftSubmission[]
   staffShiftSchedules              StaffShiftSchedule[]
+  staffShiftScheduleDrafts         StaffShiftScheduleDraft[]
   memberBenefitSettings            MemberBenefitSetting[]
   storeStatus                      StoreStatus?
   createdAt                        DateTime                          @default(now())
@@ -432,6 +434,39 @@ model StaffShiftAssignment {
   @@index([scheduleId, day])
   @@index([userId])
   @@map("staff_shift_assignments")
+}
+
+model StaffShiftScheduleDraft {
+  id                String                      @id @default(cuid())
+  officialAccountId String
+  month             String
+  officialAccount   OfficialAccount             @relation(fields: [officialAccountId], references: [id], onDelete: Cascade)
+  assignments       StaffShiftDraftAssignment[]
+  createdAt         DateTime                    @default(now())
+  updatedAt         DateTime                    @updatedAt
+
+  @@unique([officialAccountId, month])
+  @@index([officialAccountId, month])
+  @@map("staff_shift_schedule_drafts")
+}
+
+model StaffShiftDraftAssignment {
+  id        String                  @id @default(cuid())
+  draftId   String
+  userId    String
+  day       Int
+  startTime String?
+  endTime   String?
+  isFree    Boolean                 @default(false)
+  memo      String?
+  draft     StaffShiftScheduleDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  user      User                    @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  createdAt DateTime                @default(now())
+  updatedAt DateTime                @updatedAt
+
+  @@index([draftId, day])
+  @@index([userId])
+  @@map("staff_shift_draft_assignments")
 }
 
 model StoreStatus {

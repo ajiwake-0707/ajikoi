@@ -115,6 +115,33 @@ export default async function AdminShiftsPage({ searchParams }: Props) {
         },
       })
     : null;
+  const draft =
+    adminUser.officialAccountId
+      ? await prisma.staffShiftScheduleDraft.findUnique({
+          where: {
+            officialAccountId_month: {
+              officialAccountId: adminUser.officialAccountId,
+              month,
+            },
+          },
+          select: {
+            updatedAt: true,
+            assignments: {
+              orderBy: [{ day: "asc" }, { startTime: "asc" }],
+              select: {
+                id: true,
+                userId: true,
+                day: true,
+                startTime: true,
+                endTime: true,
+                isFree: true,
+                memo: true,
+              },
+            },
+          },
+        })
+      : null;
+  const visibleAssignments = draft?.assignments ?? schedule?.assignments ?? [];
 
   return (
     <AdminShiftsClient
@@ -135,7 +162,7 @@ export default async function AdminShiftsPage({ searchParams }: Props) {
           })),
         };
       })}
-      initialAssignments={(schedule?.assignments ?? []).map((assignment) => ({
+      initialAssignments={visibleAssignments.map((assignment) => ({
         id: assignment.id,
         userId: assignment.userId,
         day: assignment.day,
@@ -144,6 +171,8 @@ export default async function AdminShiftsPage({ searchParams }: Props) {
         isFree: assignment.isFree,
         memo: assignment.memo,
       }))}
+      initialAssignmentsSource={draft ? "draft" : schedule ? "confirmed" : "empty"}
+      initialDraftUpdatedAt={draft?.updatedAt.toISOString() ?? null}
     />
   );
 }

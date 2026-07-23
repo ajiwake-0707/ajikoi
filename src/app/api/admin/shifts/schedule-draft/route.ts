@@ -13,7 +13,7 @@ const assignmentSchema = z.object({
   memo: z.string().trim().max(200).nullable().optional(),
 });
 
-const saveScheduleSchema = z.object({
+const saveDraftSchema = z.object({
   month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/),
   assignments: z.array(assignmentSchema).max(500),
 });
@@ -28,13 +28,12 @@ export async function PATCH(request: Request) {
     const adminUser = await requireAdminUser();
     if (!adminUser.officialAccountId) {
       return NextResponse.json(
-        { ok: false, message: "公式アカウントに紐づく管理者のみ確定シフトを保存できます。" },
+        { ok: false, message: "公式アカウントに紐づく管理者のみDraftを保存できます。" },
         { status: 403 },
       );
     }
-    const officialAccountId = adminUser.officialAccountId;
 
-    const parsed = saveScheduleSchema.safeParse(await request.json());
+    const parsed = saveDraftSchema.safeParse(await request.json());
     if (!parsed.success) {
       return NextResponse.json(
         { ok: false, message: parsed.error.issues[0]?.message ?? "入力内容が不正です。" },
@@ -70,7 +69,7 @@ export async function PATCH(request: Request) {
     if (uniqueUserIds.length > 0) {
       const permissions = await prisma.staffStoreOperationPermission.findMany({
         where: {
-          officialAccountId,
+          officialAccountId: adminUser.officialAccountId,
           userId: { in: uniqueUserIds },
           user: {
             role: "staff",
@@ -90,15 +89,15 @@ export async function PATCH(request: Request) {
       }
     }
 
-    const schedule = await prisma.staffShiftSchedule.upsert({
+    const draft = await prisma.staffShiftScheduleDraft.upsert({
       where: {
         officialAccountId_month: {
-          officialAccountId,
+          officialAccountId: adminUser.officialAccountId,
           month,
         },
       },
       create: {
-        officialAccountId,
+        officialAccountId: adminUser.officialAccountId,
         month,
       },
       update: {},
@@ -108,13 +107,13 @@ export async function PATCH(request: Request) {
     });
 
     await prisma.$transaction(async (tx) => {
-      await tx.staffShiftAssignment.deleteMany({
-        where: { scheduleId: schedule.id },
+      await tx.staffShiftDraftAssignment.deleteMany({
+        where: { draftId: draft.id },
       });
       if (assignments.length > 0) {
-        await tx.staffShiftAssignment.createMany({
+        await tx.staffShiftDraftAssignment.createMany({
           data: assignments.map((assignment) => ({
-            scheduleId: schedule.id,
+            draftId: draft.id,
             userId: assignment.userId,
             day: assignment.day,
             startTime: assignment.isFree ? null : (assignment.startTime ?? null),
@@ -124,17 +123,11 @@ export async function PATCH(request: Request) {
           })),
         });
       }
-      await tx.staffShiftScheduleDraft.deleteMany({
-        where: {
-          officialAccountId,
-          month,
-        },
-      });
     });
 
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, updatedAt: new Date().toISOString() });
   } catch (error) {
-    console.error("/api/admin/shifts/schedule PATCH error", error);
-    return NextResponse.json({ ok: false, message: "確定シフトの保存に失敗しました。" }, { status: 500 });
+    console.error("/api/admin/shifts/schedule-draft PATCH error", error);
+    return NextResponse.json({ ok: false, message: "Draftの保存に失敗しました。" }, { status: 500 });
   }
 }

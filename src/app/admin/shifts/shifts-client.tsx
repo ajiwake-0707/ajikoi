@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 type ShiftStatus = "UNSET" | "AVAILABLE" | "UNAVAILABLE";
@@ -54,6 +54,8 @@ type Props = {
   month: string;
   staff: StaffShiftRow[];
   initialAssignments: ShiftAssignment[];
+  initialAssignmentsSource: "confirmed" | "draft" | "empty";
+  initialDraftUpdatedAt: string | null;
 };
 
 const weekdayLabels = ["日", "月", "火", "水", "木", "金", "土"];
@@ -189,7 +191,13 @@ function buildConflictGroups(candidates: ShiftAssignment[]) {
   return { nonConflicting, conflicts };
 }
 
-export default function AdminShiftsClient({ month, staff, initialAssignments }: Props) {
+export default function AdminShiftsClient({
+  month,
+  staff,
+  initialAssignments,
+  initialAssignmentsSource,
+  initialDraftUpdatedAt,
+}: Props) {
   const router = useRouter();
   const [assignments, setAssignments] = useState(initialAssignments);
   const [assignmentDay, setAssignmentDay] = useState(1);
@@ -199,6 +207,10 @@ export default function AdminShiftsClient({ month, staff, initialAssignments }: 
   const [assignmentIsFree, setAssignmentIsFree] = useState(false);
   const [isSavingSchedule, setIsSavingSchedule] = useState(false);
   const [scheduleMessage, setScheduleMessage] = useState<string | null>(null);
+  const [draftStatus, setDraftStatus] = useState<"idle" | "saving" | "saved" | "error">(
+    initialAssignmentsSource === "draft" ? "saved" : "idle",
+  );
+  const [draftUpdatedAt, setDraftUpdatedAt] = useState<string | null>(initialDraftUpdatedAt);
   const [autoReflectConflicts, setAutoReflectConflicts] = useState<AutoReflectConflict[]>([]);
   const [activeConflictIndex, setActiveConflictIndex] = useState(0);
   const [selectedConflictCandidateIds, setSelectedConflictCandidateIds] = useState<string[]>([]);
@@ -210,6 +222,8 @@ export default function AdminShiftsClient({ month, staff, initialAssignments }: 
   const submittedCount = staff.filter((row) => row.submittedAt).length;
   const totalCount = staff.length;
   const showConfirmedScheduleInDailyList = assignments.length > 0;
+  const didMountDraftEffectRef = useRef(false);
+  const lastDraftSignatureRef = useRef(JSON.stringify(initialAssignments));
 
   const normalizedStaff = useMemo(
     () =>
@@ -245,6 +259,49 @@ export default function AdminShiftsClient({ month, staff, initialAssignments }: 
     }
     return grouped;
   }, [assignments]);
+
+  useEffect(() => {
+    const signature = JSON.stringify(assignments);
+    if (!didMountDraftEffectRef.current) {
+      didMountDraftEffectRef.current = true;
+      lastDraftSignatureRef.current = signature;
+      return;
+    }
+    if (signature === lastDraftSignatureRef.current) return;
+
+    const timeoutId = window.setTimeout(() => {
+      setDraftStatus("saving");
+      void fetch("/api/admin/shifts/schedule-draft", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          month,
+          assignments: assignments.map((assignment) => ({
+            userId: assignment.userId,
+            day: assignment.day,
+            startTime: assignment.isFree ? null : assignment.startTime,
+            endTime: assignment.isFree ? null : assignment.endTime,
+            isFree: assignment.isFree,
+            memo: null,
+          })),
+        }),
+      })
+        .then(async (response) => {
+          const json = (await response.json()) as { ok?: boolean; updatedAt?: string; message?: string };
+          if (!response.ok || !json.ok) {
+            throw new Error(json.message ?? "Draftの保存に失敗しました。");
+          }
+          lastDraftSignatureRef.current = signature;
+          setDraftUpdatedAt(json.updatedAt ?? new Date().toISOString());
+          setDraftStatus("saved");
+        })
+        .catch(() => {
+          setDraftStatus("error");
+        });
+    }, 800);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [assignments, month]);
 
   const handleMonthChange = (nextMonth: string) => {
     router.push(`/admin/shifts?month=${encodeURIComponent(nextMonth)}`);
@@ -555,6 +612,8 @@ export default function AdminShiftsClient({ month, staff, initialAssignments }: 
         throw new Error(json.message ?? "確定シフトの保存に失敗しました。");
       }
       setScheduleMessage("確定シフトを保存しました。");
+      setDraftStatus("idle");
+      setDraftUpdatedAt(null);
       router.refresh();
     } catch (error) {
       setScheduleMessage(error instanceof Error ? error.message : "確定シフトの保存に失敗しました。");
@@ -580,7 +639,7 @@ export default function AdminShiftsClient({ month, staff, initialAssignments }: 
             type="month"
             value={month}
             onChange={(event) => handleMonthChange(event.target.value)}
-            className="block h-12 w-full min-w-0 max-w-full appearance-none rounded-lg border border-[#cbd5e1] px-2 py-0 text-center text-sm font-semibold leading-[48px] outline-none focus:border-[#0f766e] sm:w-64"
+            className="block h-12 w-full min-w-0 max-w-full appearance-none rounded-lg border border-[#cbd5e1] px-2 py-0 text-center text-sm font-semibold leading-12 outline-none focus:border-[#0f766e] sm:w-64"
           />
         </label>
         <div className="mt-3 grid grid-cols-2 gap-2 text-center text-sm sm:max-w-sm">
@@ -699,6 +758,19 @@ export default function AdminShiftsClient({ month, staff, initialAssignments }: 
         >
           希望シフトを自動反映
         </button>
+        <p
+          className={`mt-2 text-xs font-semibold ${
+            draftStatus === "error" ? "text-[#be123c]" : "text-[#64748b]"
+          }`}
+        >
+          {draftStatus === "saving"
+            ? "Draft保存中..."
+            : draftStatus === "saved"
+              ? `Draft保存済み${draftUpdatedAt ? `: ${new Date(draftUpdatedAt).toLocaleTimeString("ja-JP")}` : ""}`
+              : draftStatus === "error"
+                ? "Draft保存に失敗しました。通信状態を確認してください。"
+                : "編集するとDraftとして自動保存されます。"}
+        </p>
 
         <div className="mt-4 grid gap-3 md:grid-cols-[110px_1fr_90px_120px_120px_auto]">
           <label className="block">
@@ -880,7 +952,7 @@ export default function AdminShiftsClient({ month, staff, initialAssignments }: 
                     <select
                       value={editingAvailability.startTime}
                       onChange={(event) => updateEditingStartTime(event.target.value)}
-                      className="block h-12 w-full min-w-0 max-w-full appearance-none rounded-lg border border-[#cbd5e1] bg-white px-2 py-0 text-center text-sm font-semibold leading-[48px] outline-none focus:border-[#0f766e]"
+                      className="block h-12 w-full min-w-0 max-w-full appearance-none rounded-lg border border-[#cbd5e1] bg-white px-2 py-0 text-center text-sm font-semibold leading-12 outline-none focus:border-[#0f766e]"
                     >
                       <option value="">指定なし</option>
                       {timeOptions.map((time) => (
@@ -896,7 +968,7 @@ export default function AdminShiftsClient({ month, staff, initialAssignments }: 
                       value={editingAvailability.endTime}
                       onChange={(event) => updateEditingEndTime(event.target.value)}
                       disabled={!editingAvailability.startTime}
-                      className="block h-12 w-full min-w-0 max-w-full appearance-none rounded-lg border border-[#cbd5e1] bg-white px-2 py-0 text-center text-sm font-semibold leading-[48px] outline-none focus:border-[#0f766e] disabled:bg-[#f8fafc] disabled:text-[#94a3b8]"
+                      className="block h-12 w-full min-w-0 max-w-full appearance-none rounded-lg border border-[#cbd5e1] bg-white px-2 py-0 text-center text-sm font-semibold leading-12 outline-none focus:border-[#0f766e] disabled:bg-[#f8fafc] disabled:text-[#94a3b8]"
                     >
                       {!editingAvailability.startTime ? <option value="">指定なし</option> : null}
                       {getEndTimeOptions(editingAvailability.startTime).map((time) => (
