@@ -218,6 +218,7 @@ export default function AdminShiftsClient({
   const [isSavingAvailability, setIsSavingAvailability] = useState(false);
   const [availabilityMessage, setAvailabilityMessage] = useState<string | null>(null);
   const [releasingSubmissionKey, setReleasingSubmissionKey] = useState<string | null>(null);
+  const [isAssignmentSummaryOpen, setIsAssignmentSummaryOpen] = useState(false);
   const days = useMemo(() => Array.from({ length: getDaysInMonth(month) }, (_, index) => index + 1), [month]);
   const submittedCount = staff.filter((row) => row.submittedAt).length;
   const totalCount = staff.length;
@@ -259,6 +260,17 @@ export default function AdminShiftsClient({
     }
     return grouped;
   }, [assignments]);
+  const assignmentSummary = useMemo(
+    () =>
+      staff
+        .map((row) => ({
+          userId: row.userId,
+          displayName: row.displayName,
+          count: assignments.filter((assignment) => assignment.userId === row.userId).length,
+        }))
+        .sort((a, b) => b.count - a.count || a.displayName.localeCompare(b.displayName, "ja")),
+    [assignments, staff],
+  );
 
   useEffect(() => {
     const signature = JSON.stringify(assignments);
@@ -742,14 +754,23 @@ export default function AdminShiftsClient({
               修正が終われば必ず<span className="font-bold text-[#be123c]">「確定シフトを保存」</span>を押してください。
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => void handleSaveSchedule()}
-            disabled={isSavingSchedule}
-            className="rounded-lg bg-[#0f766e] px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-[#94a3b8]"
-          >
-            {isSavingSchedule ? "保存中..." : "確定シフトを保存"}
-          </button>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <button
+              type="button"
+              onClick={() => setIsAssignmentSummaryOpen(true)}
+              className="rounded-lg border border-[#cbd5e1] px-4 py-2 text-sm font-bold text-[#334155]"
+            >
+              回数を確認
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleSaveSchedule()}
+              disabled={isSavingSchedule}
+              className="rounded-lg bg-[#0f766e] px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-[#94a3b8]"
+            >
+              {isSavingSchedule ? "保存中..." : "確定シフトを保存"}
+            </button>
+          </div>
         </div>
         <button
           type="button"
@@ -1006,6 +1027,64 @@ export default function AdminShiftsClient({
                 className="rounded-lg bg-[#0f766e] px-4 py-3 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-[#94a3b8]"
               >
                 {isSavingAvailability ? "保存中..." : "保存"}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {isAssignmentSummaryOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <section className="flex max-h-[85dvh] w-full max-w-lg flex-col rounded-2xl bg-white shadow-xl">
+            <div className="flex items-start justify-between gap-3 border-b border-[#e2e8f0] p-5">
+              <div>
+                <p className="text-sm font-semibold text-[#0f766e]">シフト回数</p>
+                <h2 className="mt-1 text-xl font-bold">スタッフ別の入っている回数</h2>
+                <p className="mt-1 text-sm text-[#64748b]">
+                  現在のDraft/確定シフト作成内容: 全{assignments.length}件
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsAssignmentSummaryOpen(false)}
+                aria-label="閉じる"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#f1f5f9] text-xl font-bold text-[#334155]"
+              >
+                ×
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-5">
+              <div className="space-y-2">
+                {assignmentSummary.map((row, index) => (
+                  <div
+                    key={row.userId}
+                    className={`flex items-center justify-between gap-3 rounded-xl px-4 py-3 ${
+                      row.count > 0 ? "bg-[#f8fafc]" : "bg-white text-[#94a3b8]"
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-bold text-[#0f172a]">
+                        {index + 1}. {row.displayName}
+                      </p>
+                    </div>
+                    <span
+                      className={`shrink-0 rounded-full px-3 py-1 text-sm font-bold ${
+                        row.count > 0 ? "bg-[#ecfdf5] text-[#0f766e]" : "bg-[#f1f5f9] text-[#64748b]"
+                      }`}
+                    >
+                      {row.count}回
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="border-t border-[#e2e8f0] p-4">
+              <button
+                type="button"
+                onClick={() => setIsAssignmentSummaryOpen(false)}
+                className="w-full rounded-lg bg-[#0f766e] px-4 py-3 text-sm font-bold text-white"
+              >
+                閉じる
               </button>
             </div>
           </section>
