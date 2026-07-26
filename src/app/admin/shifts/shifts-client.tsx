@@ -100,26 +100,6 @@ function resolveEntryClassName(entry: ShiftEntry | undefined) {
   return "bg-[#ecfdf5] text-[#0f766e]";
 }
 
-function resolveDailyListCellLabel(
-  entry: ShiftEntry | undefined,
-  confirmedRows: ShiftAssignment[],
-  showConfirmedSchedule: boolean,
-) {
-  if (!showConfirmedSchedule) return resolveEntryLabel(entry);
-  if (confirmedRows.length === 0) return "未定";
-  return confirmedRows.map((assignment) => resolveAssignmentLabel(assignment)).join(" / ");
-}
-
-function resolveDailyListCellClassName(
-  entry: ShiftEntry | undefined,
-  confirmedRows: ShiftAssignment[],
-  showConfirmedSchedule: boolean,
-) {
-  if (!showConfirmedSchedule) return resolveEntryClassName(entry);
-  if (confirmedRows.length === 0) return "bg-[#f8fafc] text-[#64748b]";
-  return "bg-[#ecfdf5] text-[#0f766e]";
-}
-
 function isSameAssignment(a: ShiftAssignment, b: ShiftAssignment) {
   return (
     a.userId === b.userId &&
@@ -222,7 +202,6 @@ export default function AdminShiftsClient({
   const days = useMemo(() => Array.from({ length: getDaysInMonth(month) }, (_, index) => index + 1), [month]);
   const submittedCount = staff.filter((row) => row.submittedAt).length;
   const totalCount = staff.length;
-  const showConfirmedScheduleInDailyList = assignments.length > 0;
   const didMountDraftEffectRef = useRef(false);
   const lastDraftSignatureRef = useRef(JSON.stringify(initialAssignments));
 
@@ -241,19 +220,6 @@ export default function AdminShiftsClient({
       const rows = grouped.get(assignment.day) ?? [];
       rows.push(assignment);
       grouped.set(assignment.day, rows);
-    }
-    for (const rows of grouped.values()) {
-      rows.sort((a, b) => (a.startTime ?? "").localeCompare(b.startTime ?? ""));
-    }
-    return grouped;
-  }, [assignments]);
-  const assignmentsByUserDay = useMemo(() => {
-    const grouped = new Map<string, ShiftAssignment[]>();
-    for (const assignment of assignments) {
-      const key = `${assignment.userId}:${assignment.day}`;
-      const rows = grouped.get(key) ?? [];
-      rows.push(assignment);
-      grouped.set(key, rows);
     }
     for (const rows of grouped.values()) {
       rows.sort((a, b) => (a.startTime ?? "").localeCompare(b.startTime ?? ""));
@@ -722,16 +688,15 @@ export default function AdminShiftsClient({
                     </th>
                     {days.map((day) => {
                       const entry = row.entryByDay.get(day);
-                      const confirmedRows = assignmentsByUserDay.get(`${row.userId}:${day}`) ?? [];
                       return (
                         <td key={day} className="align-top">
                           <button
                             type="button"
                             onClick={() => handleOpenAvailabilityEdit(row, day, entry)}
-                            className={`min-h-12 w-full rounded-lg px-2 py-2 text-center text-xs font-semibold transition hover:ring-2 hover:ring-[#0f766e] hover:ring-offset-1 ${resolveDailyListCellClassName(entry, confirmedRows, showConfirmedScheduleInDailyList)}`}
+                            className={`min-h-12 w-full rounded-lg px-2 py-2 text-center text-xs font-semibold transition hover:ring-2 hover:ring-[#0f766e] hover:ring-offset-1 ${resolveEntryClassName(entry)}`}
                             title={`${row.displayName} ${day}日を修正`}
                           >
-                            {resolveDailyListCellLabel(entry, confirmedRows, showConfirmedScheduleInDailyList)}
+                            {resolveEntryLabel(entry)}
                           </button>
                         </td>
                       );
