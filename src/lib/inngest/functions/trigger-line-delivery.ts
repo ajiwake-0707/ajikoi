@@ -41,6 +41,17 @@ function chunkArray<T>(list: T[], chunkSize: number) {
   return chunks;
 }
 
+type RecipientResult = {
+  userId: string;
+  displayName: string | null;
+  attemptedAt: string;
+  completedAt: string;
+  status: "accepted" | "failed";
+  httpStatus: number | null;
+  requestId: string | null;
+  error: string | null;
+};
+
 function createAggregationUnit() {
   return `spot_${Date.now().toString(36)}`;
 }
@@ -74,12 +85,12 @@ export const triggerLineDelivery = inngest.createFunction(
             userId: { in: targetUserIds },
             ...(officialAccountId ? { officialAccountId } : {}),
           },
-          select: { userId: true },
+          select: { userId: true, displayName: true },
         });
       }
       return prisma.user.findMany({
         where: officialAccountId ? { officialAccountId } : undefined,
-        select: { userId: true },
+        select: { userId: true, displayName: true },
       });
     });
 
@@ -88,12 +99,15 @@ export const triggerLineDelivery = inngest.createFunction(
       return { ok: true, sent: 0, failed: 0 };
     }
 
-    let sent = 0;
-    let failed = 0;
-    for (const chunk of chunkArray(userIds, 50)) {
-      const results = await step.run(`send-line-push-${sent + failed}`, async () => {
-        return Promise.allSettled(
-          chunk.map(async (to) => {
+    const recipientResults: RecipientResult[] = [];
+    for (const [index, chunk] of chunkArray(recipients, 50).entries()) {
+      const results = await step.run(`send-line-push-results-${index}`, async () => {
+        // Return JSON-safe outcomes so Inngest preserves individual failures on replay.
+        return Promise.all(chunk.map(async (recipient): Promise<RecipientResult> => {
+          const attemptedAt = new Date().toISOString();
+          let httpStatus: number | null = null;
+          let requestId: string | null = null;
+          try {
             const response = await fetch(LINE_PUSH_API_URL, {
               method: "POST",
               headers: {
@@ -101,27 +115,42 @@ export const triggerLineDelivery = inngest.createFunction(
                 Authorization: `Bearer ${accessToken}`,
               },
               body: JSON.stringify({
-                to,
+                to: recipient.userId,
                 messages,
                 customAggregationUnits: [aggregationUnit],
               }),
             });
-            if (!response.ok) {
-              const text = await response.text();
-              throw new Error(`LINE push failed (${response.status}): ${text}`);
-            }
-          }),
-        );
+            httpStatus = response.status;
+            requestId = response.headers.get("x-line-request-id");
+            const error = response.ok ? null : (await response.text()).slice(0, 2000);
+            return {
+              userId: recipient.userId,
+              displayName: recipient.displayName ?? null,
+              attemptedAt,
+              completedAt: new Date().toISOString(),
+              status: response.ok ? "accepted" : "failed",
+              httpStatus,
+              requestId,
+              error,
+            };
+          } catch (error) {
+            return {
+              userId: recipient.userId,
+              displayName: recipient.displayName ?? null,
+              attemptedAt,
+              completedAt: new Date().toISOString(),
+              status: "failed",
+              httpStatus,
+              requestId,
+              error: (error instanceof Error ? error.message : String(error)).slice(0, 2000),
+            };
+          }
+        }));
       });
-
-      for (const result of results) {
-        if (result.status === "fulfilled") {
-          sent += 1;
-        } else {
-          failed += 1;
-        }
-      }
+      recipientResults.push(...results);
     }
+    const sent = recipientResults.filter((result) => result.status === "accepted").length;
+    const failed = recipientResults.length - sent;
 
     await step.run("insert-history", async () => {
       await prisma.$executeRaw`
@@ -142,6 +171,8 @@ export const triggerLineDelivery = inngest.createFunction(
               sent,
               failed,
               aggregationUnit,
+              recipientResultsVersion: 1,
+              recipientResults,
             })}::jsonb,
             ${officialAccountId},
             NOW()
