@@ -207,7 +207,6 @@ export default function Home() {
   const [pointsToNextRank, setPointsToNextRank] = useState(0);
   const [isGachaJudging, setIsGachaJudging] = useState(false);
   const [gachaJudgingLabel, setGachaJudgingLabel] = useState("ポイント付与中...");
-  const [checkedInToday, setCheckedInToday] = useState(false);
   const [scanMessage, setScanMessage] = useState<string | null>(null);
   const [ownedGifts, setOwnedGifts] = useState<OwnedGift[]>([]);
   const [selectedGift, setSelectedGift] = useState<OwnedGift | null>(null);
@@ -277,7 +276,6 @@ export default function Home() {
     setCurrentRankName(syncResult.currentRankName);
     setNextRankName(syncResult.nextRankName);
     setPointsToNextRank(syncResult.pointsToNextRank);
-    setCheckedInToday(syncResult.checkedInToday);
     setHasGoogleReview(syncResult.hasGoogleReview);
     const publicStoreStatusPromise = rpcClient.user.getStoreStatus({});
     if (syncResult.role === "staff") {
@@ -459,14 +457,7 @@ export default function Home() {
     }
     autoCheckinTokenRef.current = checkinToken;
 
-    // 同日付与済みならAPIを叩かず即時終了する
-    if (checkedInToday) {
-      url.searchParams.delete("checkinToken");
-      window.history.replaceState({}, "", url.toString());
-      deferNeedsSurvey(pendingSurveyRef.current);
-      return;
-    }
-
+    // Recheck eligibility on the server: the 12-hour window may have elapsed since page load.
     const runAutoCheckin = async () => {
       setIsAutoCheckinProcessing(true);
       setScanMessage("来店ポイントを付与しています...");
@@ -483,8 +474,8 @@ export default function Home() {
         setCurrentRankName(result.currentRankName);
         setNextRankName(result.nextRankName);
         setPointsToNextRank(result.pointsToNextRank);
-        setCheckedInToday(result.checkedInToday);
         if (result.alreadyCheckedInToday) {
+          setScanMessage("次のポイント付与・ガチャは、前回のポイント付与から12時間後に利用できます。");
           return;
         }
         const giftSuffix =
@@ -514,7 +505,7 @@ export default function Home() {
     };
 
     void runAutoCheckin();
-  }, [checkedInToday, fetchOwnedGifts, isStaffPortal, pendingSurvey, profile, userRole]);
+  }, [fetchOwnedGifts, isStaffPortal, pendingSurvey, profile, userRole]);
 
   useEffect(() => {
     const claimGiftFromQuery = async () => {
@@ -648,11 +639,11 @@ export default function Home() {
         userId: profile.userId,
       });
       if (result.alreadyChallengedToday) {
-        setScanMessage("本日のガチャは実施済みです。");
+        setScanMessage("今回の来店分のガチャは実施済みです。次回は前回のポイント付与から12時間後にQRを読み込んでください。");
         return;
       }
       if (!result.executed) {
-        setScanMessage("本日はガチャを実行できません。");
+        setScanMessage("現在ガチャを実行できません。");
         return;
       }
       pendingGachaResult = {

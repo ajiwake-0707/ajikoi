@@ -83,12 +83,14 @@ function getStartOfTodayInJstUtc() {
   return new Date(startOfJstDayMs);
 }
 
-function isCheckedInToday(lastCheckInAt: Date | null) {
+const VISIT_COOLDOWN_MS = 12 * 60 * 60 * 1000;
+
+function isWithinVisitCooldown(lastCheckInAt: Date | null) {
   if (!lastCheckInAt) {
     return false;
   }
 
-  return lastCheckInAt >= getStartOfTodayInJstUtc();
+  return lastCheckInAt.getTime() > Date.now() - VISIT_COOLDOWN_MS;
 }
 
 function isCreatedTodayInJst(createdAt: Date, startOfTodayInJstUtc: Date) {
@@ -1593,7 +1595,8 @@ export const appRouter = {
         const currentRank = findRankByPoints(ranks, user.points);
         const nextRank = findNextRankByPoints(ranks, user.points);
         const rankedAt = Date.now();
-        const checkedInToday = isCheckedInToday(user.lastCheckInAt);
+        // Keep the response field compatible; it now means the 12-hour cooldown is active.
+        const checkedInToday = isWithinVisitCooldown(user.lastCheckInAt);
         let signupGiftTitle: string | null = null;
         if (user.isNew) {
           const benefitSetting = await getMemberBenefitSetting(officialAccountId);
@@ -2609,8 +2612,8 @@ export const appRouter = {
         if (!user) {
           throw new Error("ユーザーが見つかりません。");
         }
-        if (!isCheckedInToday(user.lastCheckInAt)) {
-          throw new Error("本日の来店チェックイン後にガチャへ参加してください。");
+        if (!isWithinVisitCooldown(user.lastCheckInAt)) {
+          throw new Error("QRコードで来店ポイントを取得してから12時間以内にガチャへ参加してください。");
         }
 
         const gachaLogRows = await prisma.$queryRaw<Array<{ count: number }>>`
@@ -2618,7 +2621,7 @@ export const appRouter = {
           FROM "user_history"
           WHERE "targetUserId" = ${user.userId}
             AND "action" IN ('visit_gacha_won', 'visit_gacha_lost')
-            AND "createdAt" >= ${getStartOfTodayInJstUtc()}
+            AND "createdAt" >= ${user.lastCheckInAt}
         `;
         if ((gachaLogRows[0]?.count ?? 0) > 0) {
           return {
@@ -2703,14 +2706,15 @@ export const appRouter = {
 
         const startOfTodayInJstUtc = getStartOfTodayInJstUtc();
         const now = new Date();
+        const cooldownCutoff = new Date(now.getTime() - VISIT_COOLDOWN_MS);
 
-        const updatedCount =         await prisma.$executeRaw`
+        const updatedCount = await prisma.$executeRaw`
           UPDATE "users"
           SET "points" = "points" + 1,
               "visitCount" = "visitCount" + 1,
               "lastCheckInAt" = ${now}
           WHERE "userId" = ${input.userId}
-            AND ("lastCheckInAt" IS NULL OR "lastCheckInAt" < ${startOfTodayInJstUtc})
+            AND ("lastCheckInAt" IS NULL OR "lastCheckInAt" <= ${cooldownCutoff})
         `;
 
         if (Number(updatedCount) === 0) {
