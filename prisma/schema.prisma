@@ -239,17 +239,19 @@ model Rank {
 }
 
 model AdminUser {
-  id                String           @id
+  deliveryDrafts    LineDeliveryDraft[]
+  id                String              @id
   passwordHash      String
   officialAccountId String?
-  officialAccount   OfficialAccount? @relation(fields: [officialAccountId], references: [id])
-  createdAt         DateTime         @default(now())
-  updatedAt         DateTime         @updatedAt
+  officialAccount   OfficialAccount?    @relation(fields: [officialAccountId], references: [id])
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
 
   @@map("admin_user")
 }
 
 model OfficialAccount {
+  deliveryDrafts                   LineDeliveryDraft[]
   id                               String                            @id @default(cuid())
   lineBasicId                      String                            @unique
   name                             String?
@@ -289,6 +291,7 @@ enum DeliveryVisitCountSegment {
 }
 
 model LineDeliveryTriggerSetting {
+  drafts                   LineDeliveryDraft[]
   id                       String                      @id @default(cuid())
   officialAccountId        String?
   title                    String
@@ -578,4 +581,30 @@ model AdminAuthVerification {
   updatedAt  DateTime?
 
   @@map("admin_auth_verification")
+}
+
+// Editor snapshots are separate from active settings and never used by delivery workers.
+enum LineDeliveryDraftKind {
+  SPOT
+  TRIGGER
+}
+
+model LineDeliveryDraft {
+  id                String                      @id @default(cuid())
+  kind              LineDeliveryDraftKind
+  title             String                      @default("")
+  payload           Json
+  ownerId           String
+  officialAccountId String?
+  triggerId         String?
+  owner             AdminUser                   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  officialAccount   OfficialAccount?            @relation(fields: [officialAccountId], references: [id], onDelete: Cascade)
+  trigger           LineDeliveryTriggerSetting? @relation(fields: [triggerId], references: [id], onDelete: Cascade)
+  createdAt         DateTime                    @default(now())
+  updatedAt         DateTime                    @updatedAt
+
+  @@index([officialAccountId, updatedAt])
+  @@index([ownerId, updatedAt])
+  @@index([triggerId])
+  @@map("line_delivery_drafts")
 }

@@ -1,3 +1,5 @@
+import { revalidatePath } from "next/cache";
+import { findDeliveryDraftForSubmit } from "@/lib/delivery-draft-api";
 import { DeliveryVisitCountSegment, LineDeliveryTriggerType, Prisma } from "@prisma/client";
 import { headers } from "next/headers";
 import { NextResponse } from "next/server";
@@ -8,6 +10,7 @@ import { prisma } from "@/lib/prisma";
 
 const triggerSettingSchema = z
   .object({
+    draftId: z.string().min(1).optional(),
     title: z.string().trim().min(1, "タイトルを入力してください。"),
     triggerType: z.nativeEnum(LineDeliveryTriggerType),
     notificationText: z.string().trim().max(1000, "通知テキストは1000文字以内です。").optional().default(""),
@@ -63,7 +66,7 @@ export async function POST(request: Request) {
 
     const adminUser = await prisma.adminUser.findUnique({
       where: { id: adminId },
-      select: { officialAccountId: true },
+      select: { id: true, officialAccountId: true },
     });
     if (!adminUser) {
       return NextResponse.json({ ok: false, message: "管理者情報が見つかりません。" }, { status: 403 });
@@ -77,25 +80,35 @@ export async function POST(request: Request) {
       );
     }
 
-    await prisma.lineDeliveryTriggerSetting.create({
-      data: {
-        officialAccountId: adminUser.officialAccountId ?? null,
-        title: parsed.data.title,
-        triggerType: parsed.data.triggerType,
-        notificationText: parsed.data.notificationText,
-        messages: parsed.data.messages as Prisma.InputJsonValue,
-        message:
-          parsed.data.notificationText ||
-          (parsed.data.messages.find((item) => item.type === "text")?.text ?? ""),
-        targetRankIds: parsed.data.targetRankIds,
-        targetGender: parsed.data.targetGender,
-        targetVisitCountSegments: parsed.data.targetVisitCountSegments,
-        delayDays: parsed.data.delayDays,
-        deliveryHourJst: parsed.data.deliveryHourJst,
-        isActive: parsed.data.isActive,
-      },
+    if (parsed.data.draftId && !await findDeliveryDraftForSubmit(parsed.data.draftId, adminUser, "TRIGGER")) {
+      return Response.json({ ok: false, message: "下書きが見つかりません。一覧から開き直してください。" }, { status: 404 });
+    }
+    await prisma.$transaction(async (tx) => {
+      await tx.lineDeliveryTriggerSetting.create({
+        data: {
+          officialAccountId: adminUser.officialAccountId ?? null,
+          title: parsed.data.title,
+          triggerType: parsed.data.triggerType,
+          notificationText: parsed.data.notificationText,
+          messages: parsed.data.messages as Prisma.InputJsonValue,
+          message:
+            parsed.data.notificationText ||
+            (parsed.data.messages.find((item) => item.type === "text")?.text ?? ""),
+          targetRankIds: parsed.data.targetRankIds,
+          targetGender: parsed.data.targetGender,
+          targetVisitCountSegments: parsed.data.targetVisitCountSegments,
+          delayDays: parsed.data.delayDays,
+          deliveryHourJst: parsed.data.deliveryHourJst,
+          isActive: parsed.data.isActive,
+        },
+      });
+
+      if (parsed.data.draftId) {
+        await tx.lineDeliveryDraft.delete({ where: { id: parsed.data.draftId } });
+      }
     });
 
+    revalidatePath("/admin/spot-delivery");
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error("/api/admin/spot-delivery/triggers POST error", error);

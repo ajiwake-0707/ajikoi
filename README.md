@@ -96,3 +96,19 @@ On push to `main` (when Prisma files changed), the workflow runs:
 ```bash
 npx prisma migrate deploy
 ```
+
+## LINE配信の下書き
+
+スポット配信・トリガー配信の「下書き保存」で、入力途中の内容をDBに保存できます。
+LINE配信一覧の「下書き」から「編集を再開」または「削除」を選択できます。
+下書きは同じ公式アカウントの管理者間で共有されます。公式アカウント未設定の場合は作成者本人のみ参照できます。
+既存トリガーの編集を下書き保存しても稼働中の設定は変わりません。
+配信受付／トリガー設定保存が成功すると、使用した下書きを削除します。
+画像を含む場合は保存時にアップロードするため、既存の画像アップロード用設定が必要です。
+
+初回は `pnpm exec prisma migrate deploy` と `pnpm exec prisma generate` を実行し、開発サーバーを再起動してください。
+ローカル専用の統合テスト（テスト用アカウントを作成して終了時に削除、LINE送信なし）:
+
+```bash
+node --env-file=.env scripts/test-delivery-drafts.mjs http://localhost:3001
+```

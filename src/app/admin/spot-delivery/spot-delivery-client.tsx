@@ -26,7 +26,16 @@ type TriggerSetting = {
   updatedAt: string;
 };
 
+type DraftRow = {
+  id: string;
+  kind: "SPOT" | "TRIGGER";
+  title: string;
+  triggerId: string | null;
+  updatedAt: string;
+};
+
 type Props = {
+  drafts: DraftRow[];
   deliveryHistory: DeliveryHistory[];
   triggerSettings: TriggerSetting[];
   monthlyLimit: number;
@@ -63,13 +72,33 @@ function formatTriggerType(triggerType: TriggerSetting["triggerType"]) {
 }
 
 export default function SpotDeliveryClient({
+  drafts,
   deliveryHistory,
   triggerSettings,
   monthlyLimit,
   monthlyUsed,
   monthlyRemaining,
 }: Props) {
+  const [draftRows, setDraftRows] = useState(drafts);
+  const [deletingDraftId, setDeletingDraftId] = useState<string | null>(null);
+  const [draftError, setDraftError] = useState<string | null>(null);
+  const deleteDraft = async (id: string) => {
+    if (!window.confirm("この下書きを削除しますか？")) return;
+    setDeletingDraftId(id);
+    setDraftError(null);
+    try {
+      const response = await fetch(`/api/admin/spot-delivery/drafts?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+      const json = await response.json();
+      if (!response.ok || !json.ok) throw new Error(json.message ?? "下書きを削除できませんでした。");
+      setDraftRows((rows) => rows.filter((row) => row.id !== id));
+    } catch (error) {
+      setDraftError(error instanceof Error ? error.message : "下書きを削除できませんでした。");
+    } finally {
+      setDeletingDraftId(null);
+    }
+  };
   const [activeTab, setActiveTab] = useState<"spot" | "trigger">("spot");
+  const visibleDrafts = draftRows.filter((draft) => draft.kind === (activeTab === "spot" ? "SPOT" : "TRIGGER"));
   const [triggerRows, setTriggerRows] = useState(triggerSettings);
   const [updatingTriggerId, setUpdatingTriggerId] = useState<string | null>(null);
 
@@ -134,20 +163,21 @@ export default function SpotDeliveryClient({
   };
 
   return (
-    <div className="w-full space-y-4 p-4">
-      <div className="mx-auto flex w-[90%] items-end justify-between">
-        <h1 className="text-xl font-bold">LINE配信</h1>
-        <p className="text-xs text-[#64748b]">
-          残り配信可能数 {monthlyRemaining}/{monthlyLimit}（今月送信 {monthlyUsed}通）
+    <div className="w-full min-w-0 space-y-4 px-3 py-4 sm:p-6">
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+        <h1 className="shrink-0 whitespace-nowrap text-xl font-bold">LINE配信</h1>
+        <p className="flex flex-wrap gap-x-3 gap-y-1 text-xs leading-5 text-[#64748b]">
+          <span className="whitespace-nowrap">残り配信可能数 <strong className="font-semibold text-[#334155]">{monthlyRemaining}/{monthlyLimit}</strong></span>
+          <span className="whitespace-nowrap">今月送信 {monthlyUsed}通</span>
         </p>
       </div>
-      <section className="mx-auto w-[90%] rounded-xl border border-[#dbe2ea] bg-white shadow-sm">
+      <section className="mx-auto w-full max-w-6xl rounded-xl border border-[#dbe2ea] bg-white shadow-sm">
         <div className="border-b border-[#e2e8f0] px-4 pt-3">
-          <div className="flex gap-4">
+          <div className="grid grid-cols-2 gap-4 sm:flex">
             <button
               type="button"
               onClick={() => setActiveTab("spot")}
-              className={`border-b-2 px-1 pb-2 text-sm font-semibold ${
+              className={`min-h-11 border-b-2 px-3 pb-2 text-sm font-semibold ${
                 activeTab === "spot"
                   ? "border-[#0f766e] text-[#0f172a]"
                   : "border-transparent text-[#94a3b8]"
@@ -158,7 +188,7 @@ export default function SpotDeliveryClient({
             <button
               type="button"
               onClick={() => setActiveTab("trigger")}
-              className={`border-b-2 px-1 pb-2 text-sm font-semibold ${
+              className={`min-h-11 border-b-2 px-3 pb-2 text-sm font-semibold ${
                 activeTab === "trigger"
                   ? "border-[#0f766e] text-[#0f172a]"
                   : "border-transparent text-[#94a3b8]"
@@ -169,16 +199,43 @@ export default function SpotDeliveryClient({
           </div>
         </div>
 
+        <section className="m-3 rounded-lg border border-[#e2e8f0] bg-[#f8fafc] p-3 sm:m-4 sm:p-4">
+          <h2 className="flex items-center gap-2 text-sm font-bold">下書き <span className="rounded-full bg-white px-2 py-0.5 text-xs font-medium text-[#64748b]">{visibleDrafts.length}件</span></h2>
+          <p className="mt-1 text-xs leading-5 text-[#64748b]">保存した内容から再開できます。下書きは配信されません。</p>
+          {draftError && <p role="alert" className="mt-2 text-sm text-red-700">{draftError}</p>}
+          {visibleDrafts.length === 0 ? <p className="mt-3 text-sm text-[#64748b]">保存した下書きはありません。</p> : (
+            <ul className="mt-3 divide-y divide-[#e2e8f0]">
+              {visibleDrafts.map((draft) => {
+                const path = draft.kind === "SPOT" ? "/admin/spot-delivery/new"
+                  : draft.triggerId ? `/admin/spot-delivery/triggers/${encodeURIComponent(draft.triggerId)}`
+                  : "/admin/spot-delivery/triggers/new";
+                return (
+                  <li key={draft.id} className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0 sm:flex-1">
+                      <p className="break-words text-sm font-semibold leading-6 [overflow-wrap:anywhere]">{draft.title.trim() || "タイトル未設定"}</p>
+                      <p className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-xs leading-5 text-[#64748b]"><span>{draft.triggerId ? "既存設定の編集" : "新規作成"}</span><span className="whitespace-nowrap">更新 {formatDeliveryDate(draft.updatedAt)}</span></p>
+                    </div>
+                    <div className="grid grid-cols-[1fr_auto] gap-2 sm:flex sm:shrink-0">
+                      <Link href={`${path}?draft=${encodeURIComponent(draft.id)}`} className="flex min-h-11 items-center justify-center whitespace-nowrap rounded-lg bg-[#0f766e] px-4 py-2 text-sm font-semibold text-white">編集を再開</Link>
+                      <button type="button" disabled={deletingDraftId !== null} onClick={() => void deleteDraft(draft.id)} className="min-h-11 whitespace-nowrap rounded-lg border border-[#fecaca] px-4 py-2 text-sm text-[#b91c1c] disabled:opacity-50">{deletingDraftId === draft.id ? "削除中..." : "削除"}</button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </section>
+
         {activeTab === "spot" ? (
-          <div className="space-y-3 p-4">
-            <div className="flex items-center gap-3">
+          <div className="space-y-3 p-3 sm:p-4">
+            <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center">
               <Link
                 href="/admin/spot-delivery/new"
-                className="rounded-lg bg-[#0f9f99] px-4 py-2 text-sm font-bold text-white"
+                className="flex min-h-11 items-center justify-center whitespace-nowrap rounded-lg bg-[#0f9f99] px-3 py-3 text-sm font-bold text-white sm:px-4"
               >
                 + スポット配信を作成する
               </Link>
-              <p className="text-sm text-[#64748b]">配信履歴 {deliveryHistory.length}件</p>
+              <p className="shrink-0 text-xs text-[#64748b] sm:text-sm">配信履歴 {deliveryHistory.length}件</p>
             </div>
 
             <div className="overflow-hidden rounded-lg border border-[#e2e8f0]">
@@ -191,16 +248,15 @@ export default function SpotDeliveryClient({
                     return (
                       <li
                         key={row.id}
-                        className="flex items-center justify-between gap-3 border-b border-[#f1f5f9] px-4 py-3 last:border-b-0"
+                        className="flex flex-col gap-3 border-b border-[#f1f5f9] px-3 py-4 last:border-b-0 sm:flex-row sm:items-center sm:justify-between sm:px-4"
                       >
                         <div className="min-w-0">
                           <p className="truncate text-sm font-semibold text-[#0f172a]">{row.title}</p>
-                          <div className="mt-1 flex items-center gap-2 text-xs text-[#64748b]">
+                          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-5 text-[#64748b]">
                             <span className={`rounded px-2 py-0.5 font-semibold ${status.color}`}>{status.label}</span>
                             <span>配信日時 {formatDeliveryDate(row.sentAt)}</span>
                           </div>
                         </div>
-                        <span className="text-xl leading-none text-[#94a3b8]">›</span>
                       </li>
                     );
                   })}
@@ -209,15 +265,15 @@ export default function SpotDeliveryClient({
             </div>
           </div>
         ) : (
-          <div className="space-y-3 p-4">
-            <div className="flex items-center gap-3">
+          <div className="space-y-3 p-3 sm:p-4">
+            <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center">
               <Link
                 href="/admin/spot-delivery/triggers/new"
-                className="rounded-lg bg-[#0f9f99] px-4 py-2 text-sm font-bold text-white"
+                className="flex min-h-11 items-center justify-center whitespace-nowrap rounded-lg bg-[#0f9f99] px-3 py-3 text-sm font-bold text-white sm:px-4"
               >
                 + トリガー配信を作成する
               </Link>
-              <p className="text-sm text-[#64748b]">設定一覧 {triggerRows.length}件</p>
+              <p className="shrink-0 text-xs text-[#64748b] sm:text-sm">設定一覧 {triggerRows.length}件</p>
             </div>
             <div className="overflow-hidden rounded-lg border border-[#e2e8f0]">
               {triggerRows.length === 0 ? (
@@ -227,11 +283,11 @@ export default function SpotDeliveryClient({
                   {triggerRows.map((row) => (
                     <li
                       key={row.id}
-                      className="flex items-center justify-between gap-3 border-b border-[#f1f5f9] px-4 py-3 last:border-b-0"
+                      className="flex flex-col gap-3 border-b border-[#f1f5f9] px-3 py-4 last:border-b-0 sm:flex-row sm:items-center sm:justify-between sm:px-4"
                     >
                       <div className="min-w-0">
                         <p className="truncate text-sm font-semibold text-[#0f172a]">{row.title}</p>
-                        <div className="mt-1 flex items-center gap-2 text-xs text-[#64748b]">
+                        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-5 text-[#64748b]">
                           <span
                             className={`rounded px-2 py-0.5 font-semibold ${
                               row.isActive ? "bg-[#ccfbf1] text-[#0f766e]" : "bg-[#f1f5f9] text-[#64748b]"
@@ -243,10 +299,10 @@ export default function SpotDeliveryClient({
                           <span>更新 {formatDeliveryDate(row.updatedAt)}</span>
                         </div>
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="grid grid-cols-3 gap-2 sm:flex sm:shrink-0">
                         <Link
                           href={`/admin/spot-delivery/triggers/${row.id}`}
-                          className="rounded border border-[#cbd5e1] px-2 py-1 text-xs font-semibold text-[#334155]"
+                          className="flex min-h-11 items-center justify-center whitespace-nowrap rounded-lg border border-[#cbd5e1] px-3 py-2 text-xs font-semibold text-[#334155]"
                         >
                           編集
                         </Link>
@@ -254,7 +310,7 @@ export default function SpotDeliveryClient({
                           type="button"
                           disabled={updatingTriggerId === row.id}
                           onClick={() => void toggleTriggerActive(row)}
-                          className="rounded border border-[#cbd5e1] px-2 py-1 text-xs font-semibold text-[#334155] disabled:opacity-50"
+                          className="flex min-h-11 items-center justify-center whitespace-nowrap rounded-lg border border-[#cbd5e1] px-3 py-2 text-xs font-semibold text-[#334155] disabled:opacity-50"
                         >
                           {row.isActive ? "無効化" : "有効化"}
                         </button>
@@ -262,7 +318,7 @@ export default function SpotDeliveryClient({
                           type="button"
                           disabled={updatingTriggerId === row.id}
                           onClick={() => void deleteTrigger(row)}
-                          className="rounded border border-[#fecaca] px-2 py-1 text-xs font-semibold text-[#b91c1c] disabled:opacity-50"
+                          className="min-h-11 whitespace-nowrap rounded-lg border border-[#fecaca] px-3 py-2 text-xs font-semibold text-[#b91c1c] disabled:opacity-50"
                         >
                           削除
                         </button>

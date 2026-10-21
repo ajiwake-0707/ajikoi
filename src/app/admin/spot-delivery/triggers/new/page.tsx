@@ -1,3 +1,4 @@
+import { loadDeliveryDraft } from "@/lib/delivery-draft-server";
 import { requireAdminUser } from "@/lib/admin-guard";
 import { prisma } from "@/lib/prisma";
 import TriggerDeliveryEditorClient from "./trigger-delivery-editor-client";
@@ -34,8 +35,9 @@ function resolveLineImageUrl(imageUrl: string, absoluteTemplateUrls: string[]) {
   return matched ?? null;
 }
 
-export default async function AdminTriggerDeliveryNewPage() {
-  await requireAdminUser();
+export default async function AdminTriggerDeliveryNewPage({ searchParams }: { searchParams: Promise<{ draft?: string | string[] }> }) {
+  const adminUser = await requireAdminUser();
+  const draft = await loadDeliveryDraft((await searchParams).draft, adminUser, "TRIGGER");
   const [gifts, templates, ranks] = await Promise.all([
     prisma.gift.findMany({
       orderBy: { createdAt: "desc" },
@@ -72,5 +74,5 @@ export default async function AdminTriggerDeliveryNewPage() {
     lineImageUrl: resolveLineImageUrl(gift.imageUrl, absoluteTemplateUrls),
   }));
 
-  return <TriggerDeliveryEditorClient gifts={normalizedGifts} rankOptions={ranks} />;
+  return <TriggerDeliveryEditorClient key={draft?.id ?? "new"} draft={draft} gifts={normalizedGifts} rankOptions={ranks} />;
 }

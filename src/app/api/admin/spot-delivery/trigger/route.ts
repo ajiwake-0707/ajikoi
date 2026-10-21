@@ -1,3 +1,5 @@
+import { revalidatePath } from "next/cache";
+import { findDeliveryDraftForSubmit } from "@/lib/delivery-draft-api";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 
@@ -6,6 +8,7 @@ import { inngest } from "@/lib/inngest/client";
 import { prisma } from "@/lib/prisma";
 
 const triggerPayloadSchema = z.object({
+    draftId: z.string().min(1).optional(),
   title: z.string().trim().max(120, "タイトルは120文字以内です。").optional().default(""),
   notificationText: z.string().trim().max(1000, "通知テキストは1000文字以内です。").optional().default(""),
   messages: z
@@ -71,6 +74,10 @@ export async function POST(request: Request) {
       );
     }
 
+
+    if (parsed.data.draftId && !await findDeliveryDraftForSubmit(parsed.data.draftId, adminUser, "SPOT")) {
+      return Response.json({ ok: false, message: "下書きが見つかりません。一覧から開き直してください。" }, { status: 404 });
+    }
     const { title, notificationText, messages, targetFilters } = parsed.data;
 
     const users = await prisma.user.findMany({
@@ -125,6 +132,13 @@ export async function POST(request: Request) {
       },
     });
 
+    // The job was already accepted: cleanup errors must not invite a duplicate send.
+    if (parsed.data.draftId) {
+      await prisma.lineDeliveryDraft.deleteMany({ where: { id: parsed.data.draftId } }).catch((error) => {
+        console.error("accepted delivery draft cleanup failed", error);
+      });
+    }
+    revalidatePath("/admin/spot-delivery");
     return Response.json({ ok: true, message: "トリガー配信を受け付けました。" });
   } catch (error) {
     console.error("/api/admin/spot-delivery/trigger POST error", error);

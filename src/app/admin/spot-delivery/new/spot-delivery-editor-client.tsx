@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import type { EditorDraft } from "@/lib/delivery-draft";
+import { useDeliveryDraft } from "@/lib/use-delivery-draft";
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type GiftOption = {
@@ -13,6 +15,7 @@ type GiftOption = {
 };
 
 type Props = {
+  draft?: EditorDraft;
   gifts: GiftOption[];
   rankOptions: Array<{ id: string; name: string }>;
   targetCount: number;
@@ -38,22 +41,24 @@ type LineFlexMessage = {
 type LineMessage = LineTextMessage | LineImageMessage | LineFlexMessage;
 type DeliveryVisitCountSegment = "ZERO" | "ONE" | "TWO_TO_FOUR" | "FIVE_TO_NINE" | "TEN_OR_MORE";
 
-export default function SpotDeliveryEditorClient({ gifts, rankOptions, targetCount }: Props) {
-  const [title, setTitle] = useState("");
+export default function SpotDeliveryEditorClient({ gifts, rankOptions, targetCount, draft }: Props) {
+  const restored = draft?.payload;
+  const { draftId, isSavingDraft, saveDraft, clearDraftId } = useDeliveryDraft("SPOT", draft?.id);
+  const [title, setTitle] = useState(restored ? restored.title : "");
   const [activeTab, setActiveTab] = useState<"content" | "segment">("content");
-  const [notificationText, setNotificationText] = useState("");
-  const [message, setMessage] = useState("");
-  const [showTextElement, setShowTextElement] = useState(false);
-  const [showImageElement, setShowImageElement] = useState(false);
-  const [showGiftElement, setShowGiftElement] = useState(false);
-  const [selectedGift, setSelectedGift] = useState<GiftOption | null>(null);
+  const [notificationText, setNotificationText] = useState(restored ? restored.notificationText : "");
+  const [message, setMessage] = useState(restored ? restored.message : "");
+  const [showTextElement, setShowTextElement] = useState(restored ? restored.showTextElement : false);
+  const [showImageElement, setShowImageElement] = useState(restored ? restored.showImageElement : false);
+  const [showGiftElement, setShowGiftElement] = useState(restored ? restored.showGiftElement : false);
+  const [selectedGift, setSelectedGift] = useState<GiftOption | null>(restored ? gifts.find((gift) => gift.id === restored.selectedGiftId) ?? null : null);
   const [isGiftSheetOpen, setIsGiftSheetOpen] = useState(false);
   const [selectedImageFile, setSelectedImageFile] = useState<File | null>(null);
-  const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
-  const [uploadedImageUrl, setUploadedImageUrl] = useState<string | null>(null);
-  const [targetRankIds, setTargetRankIds] = useState<string[]>([]);
-  const [targetGender, setTargetGender] = useState<"male" | "female" | "other" | null>(null);
-  const [targetVisitCountSegments, setTargetVisitCountSegments] = useState<DeliveryVisitCountSegment[]>([]);
+  const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(restored?.uploadedImageUrl ?? null);
+  const [uploadedImageUrl, setUploadedImageUrl] = useState<string | null>(restored ? restored.uploadedImageUrl : null);
+  const [targetRankIds, setTargetRankIds] = useState<string[]>(restored ? restored.targetRankIds : []);
+  const [targetGender, setTargetGender] = useState<"male" | "female" | "other" | null>(restored ? restored.targetGender : null);
+  const [targetVisitCountSegments, setTargetVisitCountSegments] = useState<DeliveryVisitCountSegment[]>(restored ? restored.targetVisitCountSegments : []);
   const [liveTargetCount, setLiveTargetCount] = useState(targetCount);
   const [isLoadingTargetCount, setIsLoadingTargetCount] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -135,19 +140,26 @@ export default function SpotDeliveryEditorClient({ gifts, rankOptions, targetCou
     };
   }, [targetGender, targetRankIds, targetVisitCountSegments]);
 
-  const handleSaveDraft = () => {
-    showToast("下書きを保存しました。");
+  const handleSaveDraft = async () => {
+    if (isSavingDraft || isSubmitting) return;
+    try {
+      await saveDraft(async () => {
+        const imageUrl = await uploadSelectedImageIfNeeded();
+        return {
+          title, notificationText, message, showTextElement, showImageElement, showGiftElement,
+          selectedGiftId: selectedGift?.id ?? null, uploadedImageUrl: imageUrl ?? null,
+          targetRankIds, targetGender, targetVisitCountSegments,
+        };
+      });
+      showToast("下書きを保存しました。LINE配信一覧から再開できます。");
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "下書きの保存に失敗しました。", true);
+    }
   };
 
-  useEffect(() => {
-    if (!selectedImageFile) {
-      setImagePreviewUrl(null);
-      return;
-    }
-    const objectUrl = URL.createObjectURL(selectedImageFile);
-    setImagePreviewUrl(objectUrl);
-    return () => URL.revokeObjectURL(objectUrl);
-  }, [selectedImageFile]);
+  useEffect(() => () => {
+    if (imagePreviewUrl?.startsWith("blob:")) URL.revokeObjectURL(imagePreviewUrl);
+  }, [imagePreviewUrl]);
 
   const openImagePicker = () => {
     setShowImageElement(true);
@@ -162,6 +174,7 @@ export default function SpotDeliveryEditorClient({ gifts, rankOptions, targetCou
     const file = event.target.files?.[0] ?? null;
     if (!file) return;
     setSelectedImageFile(file);
+    setImagePreviewUrl(URL.createObjectURL(file));
     setUploadedImageUrl(null);
   };
 
@@ -272,7 +285,7 @@ export default function SpotDeliveryEditorClient({ gifts, rankOptions, targetCou
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!canSubmit || isSubmitting) return;
+    if (isSavingDraft || !canSubmit || isSubmitting) return;
     setIsSubmitting(true);
     try {
       const imageUrl = await uploadSelectedImageIfNeeded();
@@ -285,6 +298,7 @@ export default function SpotDeliveryEditorClient({ gifts, rankOptions, targetCou
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          draftId: draftId.current,
           title,
           notificationText: notificationText.trim(),
           messages: lineMessages,
@@ -300,6 +314,7 @@ export default function SpotDeliveryEditorClient({ gifts, rankOptions, targetCou
         showToast(json.message ?? "配信に失敗しました。", true);
         return;
       }
+      clearDraftId();
       showToast("配信ジョブを開始しました。");
       setTitle("");
       setNotificationText("");
@@ -309,6 +324,7 @@ export default function SpotDeliveryEditorClient({ gifts, rankOptions, targetCou
       setShowGiftElement(false);
       setSelectedGift(null);
       setSelectedImageFile(null);
+      setImagePreviewUrl(null);
       setUploadedImageUrl(null);
       setTargetRankIds([]);
       setTargetGender(null);
@@ -324,39 +340,44 @@ export default function SpotDeliveryEditorClient({ gifts, rankOptions, targetCou
 
   return (
     <div className="w-full p-4">
+      {draft && <p className="mx-auto mb-3 w-[95%] text-sm text-[#0f766e]">下書きから編集中です。「配信する」を押すまで配信されません。</p>}
       <form onSubmit={handleSubmit} className="mx-auto w-[95%] overflow-hidden rounded-xl border border-[#dbe2ea] bg-white shadow-sm">
-        <header className="flex items-center justify-between border-b border-[#e2e8f0] px-4 py-3">
-          <div className="flex min-w-0 items-center gap-3">
-            <Link href="/admin/spot-delivery" className="text-xl leading-none text-[#334155]">
+        <header className="flex flex-col gap-3 border-b border-[#e2e8f0] px-4 py-3 md:flex-row md:items-center md:justify-between">
+          <div className="flex min-w-0 items-center gap-3 md:flex-1">
+            <Link prefetch={false} href="/admin/spot-delivery" className="text-xl leading-none text-[#334155]">
               ←
             </Link>
             <input
               value={title}
               onChange={(event) => setTitle(event.target.value)}
               placeholder="タイトル未設定"
-              className="w-52 rounded border border-transparent px-2 py-1 text-base font-bold outline-none focus:border-[#cbd5e1]"
+              className="min-w-0 w-full rounded border border-transparent px-2 py-1 text-base font-bold outline-none focus:border-[#cbd5e1]"
             />
           </div>
-          <div className="flex items-center gap-2">
-            <p className="hidden text-xs text-[#64748b] md:block">
-              配信対象 {isLoadingTargetCount ? "..." : liveTargetCount}人
-            </p>
+          <div className="grid grid-cols-2 gap-2 md:flex md:shrink-0 md:items-center">
             <button
               type="button"
-              onClick={handleSaveDraft}
-              className="rounded-lg border border-[#cbd5e1] px-3 py-1.5 text-sm font-semibold text-[#334155]"
+              onClick={() => void handleSaveDraft()}
+              disabled={isSavingDraft || isSubmitting || isUploadingImage}
+              className="min-h-11 rounded-lg border border-[#cbd5e1] px-3 py-2 text-sm font-semibold text-[#334155]"
             >
-              下書き保存
+              {isSavingDraft ? "下書き保存中..." : "下書き保存"}
             </button>
             <button
               type="submit"
-              disabled={!canSubmit || isSubmitting || isUploadingImage}
-              className="rounded-lg bg-[#0f766e] px-3 py-1.5 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-[#94a3b8]"
+              disabled={isSavingDraft || !canSubmit || isSubmitting || isUploadingImage}
+              className="min-h-11 rounded-lg bg-[#0f766e] px-3 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-[#94a3b8]"
             >
               {isUploadingImage ? "画像アップロード中..." : isSubmitting ? "配信中..." : "配信する"}
             </button>
           </div>
         </header>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#e2e8f0] bg-[#f0fdfa] px-4 py-3">
+          <span className="text-sm font-semibold text-[#334155]">配信予定人数</span>
+          <p role="status" aria-live="polite" aria-atomic="true" className="whitespace-nowrap text-sm font-bold text-[#0f766e]">
+            {isLoadingTargetCount ? "集計中..." : `${liveTargetCount.toLocaleString("ja-JP")}人`}
+          </p>
+        </div>
 
         <div className="grid grid-cols-1 md:grid-cols-[1fr_320px]">
           <div className="border-r border-[#e2e8f0] p-4">

@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import type { EditorDraft } from "@/lib/delivery-draft";
+import { useDeliveryDraft } from "@/lib/use-delivery-draft";
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type TriggerType = "USER_SIGNUP" | "CHECKIN_POINT_GRANTED" | "RANK_UP" | "BIRTHDAY" | "GIFT_EXPIRES";
@@ -21,6 +23,7 @@ type GiftOption = {
 };
 
 type Props = {
+  draft?: EditorDraft;
   gifts: GiftOption[];
   rankOptions: Array<{ id: string; name: string }>;
   mode?: "create" | "edit";
@@ -81,7 +84,10 @@ export default function TriggerDeliveryEditorClient({
   mode = "create",
   triggerId,
   initialValue,
+  draft,
 }: Props) {
+  const restored = draft?.payload;
+  const { draftId, isSavingDraft, saveDraft, clearDraftId } = useDeliveryDraft("TRIGGER", draft?.id, triggerId);
   const initialMessages = useMemo(
     () => parseInitialMessages(initialValue?.messages, initialValue?.message ?? ""),
     [initialValue?.message, initialValue?.messages],
@@ -98,31 +104,25 @@ export default function TriggerDeliveryEditorClient({
       ? gifts.find((gift) => gift.lineImageUrl === initialFlexHeroUrl) ?? null
       : null;
 
-  const [title, setTitle] = useState(initialValue?.title ?? "");
+  const [title, setTitle] = useState(restored ? restored.title : (initialValue?.title ?? ""));
   const [activeTab, setActiveTab] = useState<"content" | "segment">("content");
-  const [triggerType, setTriggerType] = useState<TriggerType>(initialValue?.triggerType ?? "USER_SIGNUP");
-  const [notificationText, setNotificationText] = useState(initialValue?.notificationText ?? "");
-  const [message, setMessage] = useState(initialTextMessage?.text ?? initialValue?.message ?? "");
-  const [showTextElement, setShowTextElement] = useState(Boolean(initialTextMessage || initialValue?.message));
-  const [showImageElement, setShowImageElement] = useState(Boolean(initialImageMessage));
-  const [showGiftElement, setShowGiftElement] = useState(Boolean(initialFlexMessage));
-  const [selectedGift, setSelectedGift] = useState<GiftOption | null>(initialGift);
+  const [triggerType, setTriggerType] = useState<TriggerType>(restored && restored.triggerType !== undefined ? restored.triggerType : (initialValue?.triggerType ?? "USER_SIGNUP"));
+  const [notificationText, setNotificationText] = useState(restored ? restored.notificationText : (initialValue?.notificationText ?? ""));
+  const [message, setMessage] = useState(restored ? restored.message : (initialTextMessage?.text ?? initialValue?.message ?? ""));
+  const [showTextElement, setShowTextElement] = useState(restored ? restored.showTextElement : (Boolean(initialTextMessage || initialValue?.message)));
+  const [showImageElement, setShowImageElement] = useState(restored ? restored.showImageElement : (Boolean(initialImageMessage)));
+  const [showGiftElement, setShowGiftElement] = useState(restored ? restored.showGiftElement : (Boolean(initialFlexMessage)));
+  const [selectedGift, setSelectedGift] = useState<GiftOption | null>(restored ? gifts.find((gift) => gift.id === restored.selectedGiftId) ?? null : initialGift);
   const [isGiftSheetOpen, setIsGiftSheetOpen] = useState(false);
   const [selectedImageFile, setSelectedImageFile] = useState<File | null>(null);
-  const [uploadedImageUrl, setUploadedImageUrl] = useState<string | null>(initialImageMessage?.originalContentUrl ?? null);
-  const [targetRankIds, setTargetRankIds] = useState<string[]>(initialValue?.targetRankIds ?? []);
-  const [targetGender, setTargetGender] = useState<"male" | "female" | "other" | null>(initialValue?.targetGender ?? null);
-  const [targetVisitCountSegments, setTargetVisitCountSegments] = useState<DeliveryVisitCountSegment[]>(
-    initialValue?.targetVisitCountSegments ?? [],
-  );
-  const [delayDirection, setDelayDirection] = useState<DelayDirection>(
-    (initialValue?.delayDays ?? 0) < 0 ? "past" : "future",
-  );
-  const [delayDayCountInput, setDelayDayCountInput] = useState<string>(
-    String(Math.max(0, Math.min(365, Math.abs(initialValue?.delayDays ?? 0)))),
-  );
-  const [deliveryHourJst, setDeliveryHourJst] = useState<number | null>(initialValue?.deliveryHourJst ?? null);
-  const [isActive, setIsActive] = useState(initialValue?.isActive ?? true);
+  const [uploadedImageUrl, setUploadedImageUrl] = useState<string | null>(restored ? restored.uploadedImageUrl : (initialImageMessage?.originalContentUrl ?? null));
+  const [targetRankIds, setTargetRankIds] = useState<string[]>(restored ? restored.targetRankIds : (initialValue?.targetRankIds ?? []));
+  const [targetGender, setTargetGender] = useState<"male" | "female" | "other" | null>(restored ? restored.targetGender : (initialValue?.targetGender ?? null));
+  const [targetVisitCountSegments, setTargetVisitCountSegments] = useState<DeliveryVisitCountSegment[]>(restored ? restored.targetVisitCountSegments : (initialValue?.targetVisitCountSegments ?? []));
+  const [delayDirection, setDelayDirection] = useState<DelayDirection>(restored && restored.delayDirection !== undefined ? restored.delayDirection : ((initialValue?.delayDays ?? 0) < 0 ? "past" : "future"));
+  const [delayDayCountInput, setDelayDayCountInput] = useState<string>(restored && restored.delayDayCountInput !== undefined ? restored.delayDayCountInput : (String(Math.max(0, Math.min(365, Math.abs(initialValue?.delayDays ?? 0))))));
+  const [deliveryHourJst, setDeliveryHourJst] = useState<number | null>(restored && restored.deliveryHourJst !== undefined ? restored.deliveryHourJst : (initialValue?.deliveryHourJst ?? null));
+  const [isActive, setIsActive] = useState(restored && restored.isActive !== undefined ? restored.isActive : (initialValue?.isActive ?? true));
   const [isSaving, setIsSaving] = useState(false);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -154,13 +154,27 @@ export default function TriggerDeliveryEditorClient({
     setTimeout(() => setToast(null), 2400);
   };
 
-  const handleSaveDraft = () => {
-    showToast("下書きを保存しました。");
+  const handleSaveDraft = async () => {
+    if (isSavingDraft || isSaving) return;
+    try {
+      await saveDraft(async () => {
+        const imageUrl = await uploadSelectedImageIfNeeded();
+        return {
+          title, notificationText, message, showTextElement, showImageElement, showGiftElement,
+          selectedGiftId: selectedGift?.id ?? null, uploadedImageUrl: imageUrl ?? null,
+          targetRankIds, targetGender, targetVisitCountSegments,
+          triggerType, delayDirection, delayDayCountInput, deliveryHourJst, isActive,
+        };
+      });
+      showToast("下書きを保存しました。LINE配信一覧から再開できます。");
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "下書きの保存に失敗しました。", true);
+    }
   };
 
   const imagePreviewUrl = useMemo(
-    () => (selectedImageFile ? URL.createObjectURL(selectedImageFile) : initialImageMessage?.previewImageUrl ?? null),
-    [initialImageMessage?.previewImageUrl, selectedImageFile],
+    () => (selectedImageFile ? URL.createObjectURL(selectedImageFile) : uploadedImageUrl),
+    [uploadedImageUrl, selectedImageFile],
   );
   useEffect(
     () => () => {
@@ -171,11 +185,6 @@ export default function TriggerDeliveryEditorClient({
     [imagePreviewUrl],
   );
   const canUseNegativeDelay = triggerType === "BIRTHDAY" || triggerType === "GIFT_EXPIRES";
-  useEffect(() => {
-    if (!canUseNegativeDelay && delayDirection === "past") {
-      setDelayDirection("future");
-    }
-  }, [canUseNegativeDelay, delayDirection]);
   const delayDays = useMemo(() => {
     const parsed = Number.parseInt(delayDayCountInput, 10);
     const dayCount = Number.isFinite(parsed) ? Math.max(0, Math.min(365, Math.abs(parsed))) : 0;
@@ -340,7 +349,7 @@ export default function TriggerDeliveryEditorClient({
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!canSubmit || isSaving) return;
+    if (isSavingDraft || !canSubmit || isSaving) return;
 
     setIsSaving(true);
     try {
@@ -361,6 +370,7 @@ export default function TriggerDeliveryEditorClient({
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
+          draftId: draftId.current,
           title: title.trim(),
           triggerType,
           notificationText: notificationText.trim(),
@@ -377,6 +387,7 @@ export default function TriggerDeliveryEditorClient({
       if (!response.ok || !json.ok) {
         throw new Error(json.message ?? "トリガー配信の保存に失敗しました。");
       }
+      clearDraftId();
       showToast(mode === "edit" ? "トリガー配信を更新しました。" : "トリガー配信を保存しました。");
       setTimeout(() => {
         window.location.href = "/admin/spot-delivery";
@@ -390,10 +401,11 @@ export default function TriggerDeliveryEditorClient({
 
   return (
     <div className="w-full p-4">
+      {draft && <p className="mx-auto mb-3 w-[95%] text-sm text-[#0f766e]">下書きから編集中です。「更新する」または「保存する」で配信設定に反映します。</p>}
       <form onSubmit={handleSubmit} className="mx-auto w-[95%] overflow-hidden rounded-xl border border-[#dbe2ea] bg-white shadow-sm">
         <header className="flex items-center justify-between border-b border-[#e2e8f0] px-4 py-3">
           <div className="flex min-w-0 items-center gap-3">
-            <Link href="/admin/spot-delivery" className="text-xl leading-none text-[#334155]">
+            <Link prefetch={false} href="/admin/spot-delivery" className="text-xl leading-none text-[#334155]">
               ←
             </Link>
             <input
@@ -406,14 +418,15 @@ export default function TriggerDeliveryEditorClient({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={handleSaveDraft}
+              onClick={() => void handleSaveDraft()}
+              disabled={isSavingDraft || isSaving || isUploadingImage}
               className="rounded-lg border border-[#cbd5e1] px-3 py-1.5 text-sm font-semibold text-[#334155]"
             >
-              下書き保存
+              {isSavingDraft ? "下書き保存中..." : "下書き保存"}
             </button>
             <button
               type="submit"
-              disabled={!canSubmit || isUploadingImage}
+              disabled={isSavingDraft || !canSubmit || isUploadingImage}
               className="rounded-lg bg-[#0f766e] px-3 py-1.5 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-[#94a3b8]"
             >
               {isUploadingImage ? "画像アップロード中..." : isSaving ? "保存中..." : mode === "edit" ? "更新する" : "保存する"}
@@ -464,7 +477,11 @@ export default function TriggerDeliveryEditorClient({
                 <span className="text-sm font-semibold text-[#334155]">トリガー条件</span>
                 <select
                   value={triggerType}
-                  onChange={(event) => setTriggerType(event.target.value as TriggerType)}
+                  onChange={(event) => {
+                    const next = event.target.value as TriggerType;
+                    setTriggerType(next);
+                    if (next !== "BIRTHDAY" && next !== "GIFT_EXPIRES") setDelayDirection("future");
+                  }}
                   className="w-full rounded-lg border border-[#cbd5e1] px-3 py-2 text-sm outline-none focus:border-[#0f9f99]"
                 >
                   <option value="USER_SIGNUP">会員登録時</option>

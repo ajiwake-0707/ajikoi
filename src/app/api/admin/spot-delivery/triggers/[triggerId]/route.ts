@@ -1,3 +1,5 @@
+import { revalidatePath } from "next/cache";
+import { findDeliveryDraftForSubmit } from "@/lib/delivery-draft-api";
 import { DeliveryVisitCountSegment, LineDeliveryTriggerType, Prisma } from "@prisma/client";
 import { headers } from "next/headers";
 import { NextResponse } from "next/server";
@@ -7,6 +9,7 @@ import { adminAuth } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
 
 const triggerSettingSchema = z.object({
+  draftId: z.string().min(1).optional(),
   title: z.string().trim().min(1, "タイトルを入力してください。").optional(),
   triggerType: z.nativeEnum(LineDeliveryTriggerType).optional(),
   notificationText: z.string().trim().max(1000, "通知テキストは1000文字以内です。").optional(),
@@ -54,7 +57,7 @@ async function getAdminScope() {
 
   const adminUser = await prisma.adminUser.findUnique({
     where: { id: adminId },
-    select: { officialAccountId: true },
+    select: { id: true, officialAccountId: true },
   });
   if (!adminUser) {
     return { ok: false as const, status: 403, message: "管理者情報が見つかりません。" };
@@ -79,6 +82,10 @@ export async function PATCH(request: Request, context: RouteContext) {
     }
 
     const { triggerId } = await context.params;
+    if (parsed.data.draftId && !await findDeliveryDraftForSubmit(parsed.data.draftId, scope.adminUser, "TRIGGER", triggerId)) {
+      return Response.json({ ok: false, message: "下書きが見つかりません。一覧から開き直してください。" }, { status: 404 });
+    }
+
     const target = await prisma.lineDeliveryTriggerSetting.findFirst({
       where: {
         id: triggerId,
@@ -127,25 +134,32 @@ export async function PATCH(request: Request, context: RouteContext) {
       );
     }
     const nextIsActive = parsed.data.isActive ?? target.isActive;
-    await prisma.lineDeliveryTriggerSetting.update({
-      where: { id: triggerId },
-      data: {
-        title: nextTitle,
-        triggerType: nextTriggerType,
-        notificationText: nextNotificationText,
-        messages: nextMessages as Prisma.InputJsonValue,
-        message:
-          nextNotificationText ||
-          ((nextMessages as Array<{ type?: string; text?: string }>).find((item) => item.type === "text")?.text ?? ""),
-        targetRankIds: nextTargetRankIds,
-        targetGender: nextTargetGender,
-        targetVisitCountSegments: nextTargetVisitCountSegments,
-        delayDays: nextDelayDays,
-        deliveryHourJst: nextDeliveryHourJst,
-        isActive: nextIsActive,
-      },
+    await prisma.$transaction(async (tx) => {
+      await tx.lineDeliveryTriggerSetting.update({
+        where: { id: triggerId },
+        data: {
+          title: nextTitle,
+          triggerType: nextTriggerType,
+          notificationText: nextNotificationText,
+          messages: nextMessages as Prisma.InputJsonValue,
+          message:
+            nextNotificationText ||
+            ((nextMessages as Array<{ type?: string; text?: string }>).find((item) => item.type === "text")?.text ?? ""),
+          targetRankIds: nextTargetRankIds,
+          targetGender: nextTargetGender,
+          targetVisitCountSegments: nextTargetVisitCountSegments,
+          delayDays: nextDelayDays,
+          deliveryHourJst: nextDeliveryHourJst,
+          isActive: nextIsActive,
+        },
+      });
+
+      if (parsed.data.draftId) {
+        await tx.lineDeliveryDraft.delete({ where: { id: parsed.data.draftId } });
+      }
     });
 
+    revalidatePath("/admin/spot-delivery");
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error("/api/admin/spot-delivery/triggers/[triggerId] PATCH error", error);
@@ -175,6 +189,7 @@ export async function DELETE(_request: Request, context: RouteContext) {
     await prisma.lineDeliveryTriggerSetting.delete({
       where: { id: triggerId },
     });
+    revalidatePath("/admin/spot-delivery");
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error("/api/admin/spot-delivery/triggers/[triggerId] DELETE error", error);

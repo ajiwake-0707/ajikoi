@@ -1,3 +1,4 @@
+import { loadDeliveryDraft } from "@/lib/delivery-draft-server";
 import { requireAdminUser } from "@/lib/admin-guard";
 import { prisma } from "@/lib/prisma";
 import SpotDeliveryEditorClient from "./spot-delivery-editor-client";
@@ -35,8 +36,9 @@ function resolveLineImageUrl(imageUrl: string, absoluteTemplateUrls: string[]) {
   return matched ?? null;
 }
 
-export default async function AdminSpotDeliveryNewPage() {
+export default async function AdminSpotDeliveryNewPage({ searchParams }: { searchParams: Promise<{ draft?: string | string[] }> }) {
   const adminUser = await requireAdminUser();
+  const draft = await loadDeliveryDraft((await searchParams).draft, adminUser, "SPOT");
   const [gifts, templates, targetCount, ranks] = await Promise.all([
     prisma.gift.findMany({
       orderBy: { createdAt: "desc" },
@@ -76,5 +78,5 @@ export default async function AdminSpotDeliveryNewPage() {
     lineImageUrl: resolveLineImageUrl(gift.imageUrl, absoluteTemplateUrls),
   }));
 
-  return <SpotDeliveryEditorClient gifts={normalizedGifts} rankOptions={ranks} targetCount={targetCount} />;
+  return <SpotDeliveryEditorClient key={draft?.id ?? "new"} draft={draft} gifts={normalizedGifts} rankOptions={ranks} targetCount={targetCount} />;
 }

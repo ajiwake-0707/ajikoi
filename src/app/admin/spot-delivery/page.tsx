@@ -1,3 +1,4 @@
+import { deliveryDraftScope } from "@/lib/delivery-draft";
 import { Prisma } from "@prisma/client";
 
 import { requireAdminUser } from "@/lib/admin-guard";
@@ -35,7 +36,7 @@ function getStartOfNextMonthInJstUtc() {
 
 export default async function AdminSpotDeliveryPage() {
   const adminUser = await requireAdminUser();
-  const [histories, triggerSettings, monthlyUsageRows] = await Promise.all([
+  const [histories, triggerSettings, monthlyUsageRows, drafts] = await Promise.all([
     prisma.userHistory.findMany({
       where: {
         action: "line_trigger_delivery_executed",
@@ -89,6 +90,11 @@ export default async function AdminSpotDeliveryPage() {
           ? Prisma.sql`AND "officialAccountId" = ${adminUser.officialAccountId}`
           : Prisma.empty}
     `,
+    prisma.lineDeliveryDraft.findMany({
+      where: deliveryDraftScope(adminUser),
+      orderBy: { updatedAt: "desc" },
+      select: { id: true, kind: true, title: true, triggerId: true, updatedAt: true },
+    }),
   ]);
   const usedThisMonth = monthlyUsageRows[0]?.used ?? 0;
   const remainingThisMonth = Math.max(MONTHLY_LINE_DELIVERY_LIMIT - usedThisMonth, 0);
@@ -111,6 +117,7 @@ export default async function AdminSpotDeliveryPage() {
 
   return (
     <SpotDeliveryClient
+      drafts={drafts.map((draft) => ({ ...draft, updatedAt: draft.updatedAt.toISOString() }))}
       deliveryHistory={deliveryHistory}
       monthlyLimit={MONTHLY_LINE_DELIVERY_LIMIT}
       monthlyUsed={usedThisMonth}
